@@ -1,0 +1,225 @@
+/* ================================================================
+   Global Styles — Blockchain Aid Distribution Dashboard
+   Author: Motisha John Mafukashe — R2211825P
+================================================================ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: #f0f4f8;
+  color: #2d3748;
+}
+
+/* ── Layout ── */
+.page {
+  padding: 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1a2d5a;
+  margin-bottom: 6px;
+}
+
+.page-subtitle {
+  font-size: 13px;
+  color: #718096;
+  margin-bottom: 28px;
+}
+
+/* ── Stats Grid ── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+/* ── Stat Card ── */
+.stat-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  border-left: 4px solid var(--color);
+}
+
+.stat-card .label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #718096;
+  margin-bottom: 8px;
+}
+
+.stat-card .value {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--color);
+}
+
+.stat-card .sub {
+  font-size: 11px;
+  color: #a0aec0;
+  margin-top: 4px;
+}
+
+/* ── Cards ── */
+.card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  margin-bottom: 20px;
+}
+
+.card h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1a2d5a;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+/* ── Forms ── */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-group label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #4a5568;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.form-group input,
+.form-group select {
+  padding: 9px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #2d3748;
+  background: #f7fafc;
+  outline: none;
+  transition: border 0.2s;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  border-color: #4299e1;
+  background: #fff;
+}
+
+/* ── Buttons ── */
+.btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.1s;
+}
+
+.btn:hover   { opacity: 0.88; }
+.btn:active  { transform: scale(0.98); }
+.btn:disabled{ opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary  { background: #1a2d5a; color: #fff; }
+.btn-green    { background: #38a169; color: #fff; }
+.btn-red      { background: #e53e3e; color: #fff; }
+.btn-orange   { background: #dd6b20; color: #fff; }
+.btn-blue     { background: #3182ce; color: #fff; }
+.btn-sm       { padding: 6px 14px; font-size: 12px; }
+
+/* ── Table ── */
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+thead th {
+  background: #f7fafc;
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #718096;
+  border-bottom: 2px solid #e2e8f0;
+}
+
+tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #f0f4f8;
+  color: #4a5568;
+}
+
+tbody tr:hover td { background: #f7fafc; }
+
+/* ── Badges ── */
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.badge-green  { background: #c6f6d5; color: #276749; }
+.badge-red    { background: #fed7d7; color: #9b2c2c; }
+.badge-orange { background: #feebc8; color: #9c4221; }
+.badge-blue   { background: #bee3f8; color: #2a69ac; }
+.badge-gray   { background: #e2e8f0; color: #4a5568; }
+
+/* ── Alert ── */
+.alert {
+  padding: 12px 16px;
+  border-radius: 7px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.alert-success { background: #c6f6d5; color: #276749; }
+.alert-error   { background: #fed7d7; color: #9b2c2c; }
+.alert-info    { background: #bee3f8; color: #2a69ac; }
+
+/* ── Online indicator ── */
+.online-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+
+.online-dot.online  { background: #38a169; }
+.online-dot.offline { background: #e53e3e; }

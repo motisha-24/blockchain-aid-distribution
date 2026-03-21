@@ -1,0 +1,5 @@
+flask
+web3
+python-dotenv
+pycryptodome
+firebase-admin
