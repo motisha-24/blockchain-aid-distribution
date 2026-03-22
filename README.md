@@ -1,7 +1,7 @@
 # Blockchain and Fingerprint-Backed Transparent Aid Distribution System
 
 **Author:** Motisha John Mafukashe — R2211825P  
-**Institution:** [Your University Name]  
+**Institution:** [Midlands State University]  
 **Year:** 2026  
 **Module:** Computer Systems Engineering — Capstone Project
 

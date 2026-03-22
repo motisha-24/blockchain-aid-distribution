@@ -180,31 +180,47 @@ export default function NGODashboard() {
   //  REGISTER BENEFICIARY
   // ================================================================
   const handleRegister = async () => {
-    const errors = validateRegForm();
-    setRegErrors(errors);
-    if (Object.keys(errors).length > 0) {
-      showAlert('Please fix the errors in the registration form', 'error');
+  const errors = validateRegForm();
+  setRegErrors(errors);
+  if (Object.keys(errors).length > 0) {
+    showAlert('Please fix the errors in the registration form', 'error');
+    return;
+  }
+
+  // ── Check if ID already exists before submitting ───────────
+  try {
+    const check = await getBeneficiary(parseInt(regForm.id));
+    if (check.data.success) {
+      showAlert(
+        `⚠ Beneficiary ID ${regForm.id} is already registered — ` +
+        `Name: ${check.data.name} | ` +
+        `Location: ${check.data.location}`,
+        'error'
+      );
       return;
     }
-    setLoading(true);
-    try {
-      await registerBeneficiary({
-        id:          parseInt(regForm.id),
-        name:        regForm.name.trim(),
-        national_id: regForm.national_id.trim(),
-        phone:       regForm.phone.trim(),
-        location:    regForm.location.trim()
-      });
-      showAlert(`✓ ${regForm.name} registered successfully`);
-      setRegForm({ id:'', name:'', national_id:'', phone:'', location:'' });
-      setRegErrors({});
-      refreshData();
-    } catch (e) {
-      showAlert(e.response?.data?.error || 'Registration failed', 'error');
-    }
-    setLoading(false);
-  };
+  } catch {
+    // ID does not exist on blockchain — safe to proceed
+  }
 
+  setLoading(true);
+  try {
+    await registerBeneficiary({
+      id:          parseInt(regForm.id),
+      name:        regForm.name.trim(),
+      national_id: regForm.national_id.trim(),
+      phone:       regForm.phone.trim(),
+      location:    regForm.location.trim()
+    });
+    showAlert(`✓ ${regForm.name} registered successfully`);
+    setRegForm({ id:'', name:'', national_id:'', phone:'', location:'' });
+    setRegErrors({});
+    refreshData();
+  } catch (e) {
+    showAlert(e.response?.data?.error || 'Registration failed', 'error');
+  }
+  setLoading(false);
+};
   // ================================================================
   //  DISTRIBUTE AID
   // ================================================================

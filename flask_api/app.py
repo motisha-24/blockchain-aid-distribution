@@ -442,21 +442,28 @@ def index():
 def register():
     data   = request.get_json()
     errors = validate(data, {
-        "id"         : {"required": True, "type": "int",
-                        "min": 1},
-        "name"       : {"required": True, "type": "str",
-                        "min": 2, "max": 100},
+        "id"         : {"required": True, "type": "int", "min": 1},
+        "name"       : {"required": True, "type": "str", "min": 2, "max": 100},
         "national_id": {"required": True, "national_id": True},
         "phone"      : {"required": True, "phone": True},
-        "location"   : {"required": True, "type": "str",
-                        "min": 3, "max": 100},
+        "location"   : {"required": True, "type": "str", "min": 3, "max": 100},
     })
 
     if errors:
         return jsonify({"error": " | ".join(errors)}), 400
 
+    b_id = int(data["id"])
+
+    # ── Check if ID already registered ───────────────────────
+    already_exists = is_registered(b_id)
+    if already_exists.get("registered"):
+        return jsonify({
+            "error": f"Beneficiary ID {b_id} is already "
+                     f"registered on the blockchain"
+        }), 409
+
     result = register_beneficiary(
-        int(data["id"]),
+        b_id,
         data["name"].strip(),
         data["national_id"].strip(),
         data["phone"].strip(),
@@ -469,8 +476,13 @@ def register():
             "tx_hash": result["tx_hash"],
             "block"  : result["block"]
         }), 201
-    return jsonify({"error": result["error"]}), 500
-
+    else:
+        error_msg = result.get("error", "Registration failed")
+        if "already registered" in error_msg.lower():
+            return jsonify({
+                "error": f"Beneficiary ID {b_id} is already registered"
+            }), 409
+        return jsonify({"error": error_msg}), 500
 
 @app.route("/api/beneficiary/<int:b_id>", methods=["GET"])
 def get_beneficiary_route(b_id):

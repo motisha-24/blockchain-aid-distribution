@@ -69,6 +69,14 @@ def send_transaction(contract_function):
 # Updated: now includes national_id and location fields
 def register_beneficiary(b_id, name, national_id, phone, location):
     try:
+        # Check if already registered before sending transaction
+        already = registry_contract.functions.isRegistered(b_id).call()
+        if already:
+            return {
+                "success": False,
+                "error"  : f"Beneficiary ID {b_id} is already registered"
+            }
+
         fn = registry_contract.functions.registerBeneficiary(
             b_id,
             name,
@@ -78,7 +86,13 @@ def register_beneficiary(b_id, name, national_id, phone, location):
         )
         return send_transaction(fn)
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        error_msg = str(e)
+        if "already registered" in error_msg.lower():
+            return {
+                "success": False,
+                "error"  : f"Beneficiary ID {b_id} is already registered"
+            }
+        return {"success": False, "error": error_msg}
 
 
 # ── Get beneficiary details ───────────────────────────────────
