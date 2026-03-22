@@ -37,6 +37,9 @@ api.interceptors.response.use(
 
 // ── Auth ─────────────────────────────────────────────────────
 
+export const changePassword = (data) =>
+  api.post('/api/auth/users/password', data);
+
 export const getDistributionHistory = (limit = 50) =>
   api.get(`/api/distributions/history?limit=${limit}`);
 

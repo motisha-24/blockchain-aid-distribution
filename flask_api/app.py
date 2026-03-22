@@ -1,19 +1,15 @@
 # ================================================================
 #  app.py — Flask REST API Server
-#  Updated with SQLite database, input validation and full auth
+#  Updated with auto-sync, failed attempt tracking and full auth
 #  Author: Motisha John Mafukashe — R2211825P
 # ================================================================
-
-from blockchain import (
-    
-    get_all_beneficiary_ids,   # ← add this
-    )
 
 import sys
 import os
 import re
 import hashlib
 import time
+import threading
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import Flask, request, jsonify
@@ -33,10 +29,11 @@ from blockchain import (
     reactivate_beneficiary,
     get_collection_status,
     is_registered,
+    get_all_beneficiary_ids,
     w3
 )
 from cache    import cache_transaction, sync_pending_to_blockchain, get_pending
-from sms      import send_sms, get_sms_log
+from sms      import send_sms, get_sms_log, send_failure_alert
 from database import (
     init_database,
     verify_login,
@@ -53,15 +50,41 @@ app = Flask(__name__)
 CORS(app)
 
 # Initialise SQLite database on startup
-# Creates tables and seeds default users if empty
 init_database()
+
+
+# ================================================================
+#  BACKGROUND AUTO-SYNC THREAD
+#  Automatically syncs cached transactions when internet returns
+#  Matches activity diagram: "await reconnection" → auto sync
+# ================================================================
+
+def auto_sync_loop():
+    while True:
+        time.sleep(30)  # check every 30 seconds
+        try:
+            if w3.is_connected():
+                pending = get_pending()
+                if pending:
+                    print(f"[AUTO-SYNC] Found {len(pending)} pending "
+                          f"transactions — syncing...")
+                    result = sync_pending_to_blockchain()
+                    if result["synced"] > 0:
+                        print(f"[AUTO-SYNC] Synced {result['synced']} "
+                              f"transactions successfully")
+        except Exception as e:
+            print(f"[AUTO-SYNC] Error: {e}")
+
+# Start background sync thread
+sync_thread = threading.Thread(target=auto_sync_loop, daemon=True)
+sync_thread.start()
+print("[AUTO-SYNC] Background sync thread started — checks every 30s")
+
 
 # ================================================================
 #  TOKEN MANAGEMENT
 # ================================================================
 
-# In-memory token store — resets when Flask restarts
-# Acceptable for prototype — use Redis or JWT in production
 ACTIVE_TOKENS = {}
 
 
@@ -89,25 +112,11 @@ def get_token_from_request():
 # ================================================================
 
 def validate(data, rules):
-    """
-    Validates incoming request data against a set of rules.
-    Returns a list of error messages.
-    Empty list means all fields are valid.
-
-    Rule options:
-      required    : bool   — field must be present and non-empty
-      type        : str    — 'int' or 'str'
-      min         : int    — minimum value (int) or length (str)
-      max         : int    — maximum value (int) or length (str)
-      phone       : bool   — must be valid phone number
-      national_id : bool   — must be valid Zimbabwe national ID
-    """
     errors = []
 
     for field, rule in rules.items():
         value = data.get(field)
 
-        # ── Required check ────────────────────────────────────
         if rule.get("required") and not value and value != 0:
             errors.append(f"{field} is required")
             continue
@@ -115,7 +124,6 @@ def validate(data, rules):
         if value is None:
             continue
 
-        # ── Type: integer ─────────────────────────────────────
         if rule.get("type") == "int":
             try:
                 value = int(value)
@@ -131,7 +139,6 @@ def validate(data, rules):
                 errors.append(f"{field} must be a valid number")
             continue
 
-        # ── Type: string ──────────────────────────────────────
         if rule.get("type") == "str":
             str_val = str(value).strip()
             if not str_val:
@@ -146,8 +153,6 @@ def validate(data, rules):
                     f"{field} cannot exceed {rule['max']} characters"
                 )
 
-        # ── Phone number validation ───────────────────────────
-        # Accepts formats: +263771234001, 0771234001, 263771234001
         if rule.get("phone"):
             pattern = r'^\+?[0-9]{10,15}$'
             if not re.match(pattern, str(value).replace(" ", "")):
@@ -156,8 +161,6 @@ def validate(data, rules):
                     f"e.g. +263771234001"
                 )
 
-        # ── Zimbabwe National ID validation ───────────────────
-        # Accepts format: 63-123456A78 or 12-345678B90
         if rule.get("national_id"):
             pattern = r'^\d{2}-\d{6,7}[A-Z]\d{2}$'
             if not re.match(pattern, str(value).strip()):
@@ -173,90 +176,12 @@ def validate(data, rules):
 #  AUTH ENDPOINTS
 # ================================================================
 
-# ── Get distribution history (last N transactions) ────────
-@app.route("/api/distributions/history", methods=["GET"])
-def distribution_history():
-    try:
-        total_result = get_total_transactions()
-        total        = total_result.get("total", 0)
-
-        if total == 0:
-            return jsonify({
-                "success"      : True,
-                "total"        : 0,
-                "distributions": []
-            }), 200
-
-        # Get last 50 transactions — adjust as needed
-        limit  = min(int(request.args.get("limit", 50)), 100)
-        start  = max(1, total - limit + 1)
-
-        distributions = []
-        for tx_id in range(total, start - 1, -1):
-            result = get_transaction(tx_id)
-            if result["success"]:
-                # Get beneficiary name for display
-                bene = get_beneficiary(result["beneficiary_id"])
-                distributions.append({
-                    "tx_id"         : tx_id,
-                    "beneficiary_id": result["beneficiary_id"],
-                    "beneficiary_name": bene["name"]
-                        if bene["success"] else "Unknown",
-                    "amount"        : result["amount"],
-                    "aid_type"      : result["aid_type"],
-                    "aid_unit"      : result["aid_unit"],
-                    "location"      : result["location"],
-                    "cycle"         : result["cycle"],
-                    "officer"       : result["officer"],
-                    "timestamp"     : result["timestamp"],
-                    "status"        : result["status"]
-                })
-
-        return jsonify({
-            "success"      : True,
-            "total"        : total,
-            "distributions": distributions
-        }), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    
-# ── Get all beneficiaries list ────────────────────────────
-@app.route("/api/beneficiaries", methods=["GET"])
-def get_all_beneficiaries():
-    id_result = get_all_beneficiary_ids()
-    if not id_result["success"]:
-        return jsonify({"error": id_result["error"]}), 500
-
-    beneficiaries = []
-    for b_id in id_result["ids"]:
-        if b_id == 0:
-            continue
-        result = get_beneficiary(b_id)
-        if result["success"]:
-            beneficiaries.append({
-                "id"         : b_id,
-                "name"       : result["name"],
-                "national_id": result["national_id"],
-                "phone"      : result["phone"],
-                "location"   : result["location"],
-                "active"     : result["active"]
-            })
-
-    return jsonify({
-        "success"       : True,
-        "total"         : len(beneficiaries),
-        "beneficiaries" : beneficiaries
-    }), 200
-
-# ── Login ─────────────────────────────────────────────────────
 @app.route("/api/auth/login", methods=["POST"])
 def login():
     data     = request.get_json()
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
 
-    # Basic validation
     if not username or len(username) < 3:
         return jsonify({
             "error": "Username must be at least 3 characters"
@@ -267,17 +192,12 @@ def login():
             "error": "Password must be at least 6 characters"
         }), 400
 
-    # Verify against database
     user = verify_login(username, password)
     if not user:
         return jsonify({"error": "Invalid credentials"}), 401
 
-    # Update last login timestamp in database
     update_last_login(username)
-
-    # Generate session token
     token = generate_token(username, user["role"])
-
     print(f"[AUTH] Login: {username} ({user['role']})")
 
     return jsonify({
@@ -289,7 +209,6 @@ def login():
     }), 200
 
 
-# ── Logout ────────────────────────────────────────────────────
 @app.route("/api/auth/logout", methods=["POST"])
 def logout():
     token = get_token_from_request()
@@ -300,7 +219,6 @@ def logout():
     return jsonify({"success": True, "message": "Logged out"}), 200
 
 
-# ── Verify token ──────────────────────────────────────────────
 @app.route("/api/auth/verify", methods=["GET"])
 def verify():
     token = get_token_from_request()
@@ -314,7 +232,6 @@ def verify():
     }), 200
 
 
-# ── Get all users — admin only ────────────────────────────────
 @app.route("/api/auth/users", methods=["GET"])
 def get_users():
     token = get_token_from_request()
@@ -324,7 +241,6 @@ def get_users():
     return jsonify({"users": get_all_users()}), 200
 
 
-# ── Create new user — admin only ─────────────────────────────
 @app.route("/api/auth/users/create", methods=["POST"])
 def create_new_user():
     token = get_token_from_request()
@@ -356,11 +272,9 @@ def create_new_user():
         data["name"].strip(),
         data.get("email", "").strip()
     )
-
     return jsonify(result), 201 if result["success"] else 400
 
 
-# ── Update password ───────────────────────────────────────────
 @app.route("/api/auth/users/password", methods=["POST"])
 def change_password():
     token = get_token_from_request()
@@ -371,14 +285,24 @@ def change_password():
     data         = request.get_json()
     target_user  = data.get("username", "").strip()
     new_password = data.get("new_password", "").strip()
+    current_pass = data.get("current_password", "").strip()
 
     if not target_user or not new_password:
         return jsonify({
             "error": "Username and new_password are required"
         }), 400
 
-    # Users can only change their own password
-    # Admin can change anyone's password
+    if user["role"] != "ADMIN":
+        if not current_pass:
+            return jsonify({
+                "error": "Current password is required"
+            }), 400
+        verified = verify_login(target_user, current_pass)
+        if not verified:
+            return jsonify({
+                "error": "Current password is incorrect"
+            }), 401
+
     if user["role"] != "ADMIN" and user["username"] != target_user:
         return jsonify({"error": "Unauthorised"}), 403
 
@@ -390,7 +314,6 @@ def change_password():
     return jsonify(update_password(target_user, new_password)), 200
 
 
-# ── Deactivate user — admin only ──────────────────────────────
 @app.route("/api/auth/users/<username>/deactivate", methods=["POST"])
 def disable_user(username):
     token = get_token_from_request()
@@ -404,7 +327,6 @@ def disable_user(username):
     return jsonify(deactivate_user(username)), 200
 
 
-# ── Reactivate user — admin only ──────────────────────────────
 @app.route("/api/auth/users/<username>/reactivate", methods=["POST"])
 def enable_user(username):
     token = get_token_from_request()
@@ -415,8 +337,42 @@ def enable_user(username):
 
 
 # ================================================================
+#  SECURITY ENDPOINTS
+#  Handles failed fingerprint attempts from ESP32
+# ================================================================
+
+@app.route("/api/auth/failed-attempt", methods=["POST"])
+def failed_attempt():
+    data       = request.get_json()
+    b_id       = data.get("beneficiary_id", "unknown")
+    attempts   = int(data.get("attempts", 0))
+    location   = data.get("location", "unknown")
+    officer_id = data.get("officer_id", "unknown")
+
+    print(f"[SECURITY] Failed auth attempt {attempts} "
+          f"for beneficiary {b_id} at {location}")
+
+    if attempts >= 3:
+        print(f"[SECURITY] SESSION LOCKED — "
+              f"3 failed attempts for beneficiary {b_id}")
+        send_failure_alert(officer_id, attempts)
+        return jsonify({
+            "success": True,
+            "action" : "SESSION_LOCKED",
+            "message": f"Session locked after {attempts} failed attempts"
+        }), 200
+
+    return jsonify({
+        "success": True,
+        "action" : "RETRY",
+        "message": f"Attempt {attempts} — retry allowed"
+    }), 200
+
+
+# ================================================================
 #  ROOT — Health check
 # ================================================================
+
 @app.route("/", methods=["GET"])
 def index():
     cycle = get_current_cycle()
@@ -442,11 +398,11 @@ def index():
 def register():
     data   = request.get_json()
     errors = validate(data, {
-        "id"         : {"required": True, "type": "int", "min": 1},
-        "name"       : {"required": True, "type": "str", "min": 2, "max": 100},
+        "id"         : {"required": True, "type": "int",  "min": 1},
+        "name"       : {"required": True, "type": "str",  "min": 2, "max": 100},
         "national_id": {"required": True, "national_id": True},
         "phone"      : {"required": True, "phone": True},
-        "location"   : {"required": True, "type": "str", "min": 3, "max": 100},
+        "location"   : {"required": True, "type": "str",  "min": 3, "max": 100},
     })
 
     if errors:
@@ -454,7 +410,6 @@ def register():
 
     b_id = int(data["id"])
 
-    # ── Check if ID already registered ───────────────────────
     already_exists = is_registered(b_id)
     if already_exists.get("registered"):
         return jsonify({
@@ -483,6 +438,7 @@ def register():
                 "error": f"Beneficiary ID {b_id} is already registered"
             }), 409
         return jsonify({"error": error_msg}), 500
+
 
 @app.route("/api/beneficiary/<int:b_id>", methods=["GET"])
 def get_beneficiary_route(b_id):
@@ -539,64 +495,42 @@ def reactivate(b_id):
     return jsonify({"error": result["error"]}), 500
 
 
+@app.route("/api/beneficiaries", methods=["GET"])
+def get_all_beneficiaries():
+    id_result = get_all_beneficiary_ids()
+    if not id_result["success"]:
+        return jsonify({"error": id_result["error"]}), 500
+
+    beneficiaries = []
+    for b_id in id_result["ids"]:
+        if b_id == 0:
+            continue
+        result = get_beneficiary(b_id)
+        if result["success"]:
+            beneficiaries.append({
+                "id"         : b_id,
+                "name"       : result["name"],
+                "national_id": result["national_id"],
+                "phone"      : result["phone"],
+                "location"   : result["location"],
+                "active"     : result["active"]
+            })
+
+    return jsonify({
+        "success"      : True,
+        "total"        : len(beneficiaries),
+        "beneficiaries": beneficiaries
+    }), 200
+
+
 # ================================================================
 #  DISTRIBUTION ENDPOINTS
+#  Single endpoint — auto detects online/offline mode
+#  Matches activity diagram internet available decision
 # ================================================================
 
 @app.route("/api/distribute", methods=["POST"])
 def distribute():
-    data   = request.get_json()
-    errors = validate(data, {
-        "beneficiary_id": {"required": True, "type": "int", "min": 1},
-        "amount"        : {"required": True, "type": "int", "min": 1},
-        "aid_type"      : {"required": True, "type": "str", "min": 2,
-                           "max": 50},
-        "aid_unit"      : {"required": True, "type": "str", "min": 1,
-                           "max": 20},
-        "location"      : {"required": True, "type": "str", "min": 3,
-                           "max": 100},
-    })
-
-    if errors:
-        return jsonify({"error": " | ".join(errors)}), 400
-
-    b_id     = int(data["beneficiary_id"])
-    amount   = int(data["amount"])
-    aid_type = data["aid_type"].upper().strip()
-    aid_unit = data["aid_unit"].upper().strip()
-    location = data["location"].strip()
-
-    check = has_collected(b_id, aid_type)
-    if check["success"] and check["collected"]:
-        return jsonify({
-            "error": f"DUPLICATE: Beneficiary already received "
-                     f"{aid_type} this cycle"
-        }), 409
-
-    result = distribute_aid(b_id, amount, aid_type, aid_unit, location)
-
-    if result["success"]:
-        bene = get_beneficiary(b_id)
-        if bene["success"]:
-            send_sms(
-                bene["phone"], bene["name"],
-                amount, result["tx_hash"],
-                aid_type, aid_unit
-            )
-        return jsonify({
-            "message" : "Aid distributed successfully",
-            "aid_type": aid_type,
-            "aid_unit": aid_unit,
-            "amount"  : amount,
-            "location": location,
-            "tx_hash" : result["tx_hash"],
-            "block"   : result["block"]
-        }), 200
-    return jsonify({"error": result["error"]}), 500
-
-
-@app.route("/api/distribute/offline", methods=["POST"])
-def distribute_offline():
     data   = request.get_json()
     errors = validate(data, {
         "beneficiary_id": {"required": True, "type": "int", "min": 1},
@@ -609,33 +543,67 @@ def distribute_offline():
     if errors:
         return jsonify({"error": " | ".join(errors)}), 400
 
-    cached = cache_transaction(
-        int(data["beneficiary_id"]),
-        int(data["amount"]),
-        data["aid_type"].upper().strip(),
-        data["aid_unit"].upper().strip(),
-        data["location"].strip(),
-        data.get("officer_id", "unknown")
-    )
+    b_id     = int(data["beneficiary_id"])
+    amount   = int(data["amount"])
+    aid_type = data["aid_type"].upper().strip()
+    aid_unit = data["aid_unit"].upper().strip()
+    location = data["location"].strip()
 
-    bene = get_beneficiary(int(data["beneficiary_id"]))
-    if bene["success"]:
-        send_sms(
-            bene["phone"], bene["name"],
-            int(data["amount"]),
-            f"PENDING-{cached['id']}",
-            data["aid_type"].upper(),
-            data["aid_unit"].upper()
+    # ── Duplicate check ───────────────────────────────────────
+    check = has_collected(b_id, aid_type)
+    if check["success"] and check["collected"]:
+        return jsonify({
+            "error": f"DUPLICATE: Beneficiary already received "
+                     f"{aid_type} this cycle"
+        }), 409
+
+    # ── AUTO detect internet and route accordingly ────────────
+    if w3.is_connected():
+        # ONLINE — send directly to blockchain
+        result = distribute_aid(b_id, amount, aid_type, aid_unit, location)
+
+        if result["success"]:
+            bene = get_beneficiary(b_id)
+            if bene["success"]:
+                send_sms(
+                    bene["phone"], bene["name"],
+                    amount, result["tx_hash"],
+                    aid_type, aid_unit
+                )
+            return jsonify({
+                "message" : "Aid distributed successfully",
+                "mode"    : "ONLINE",
+                "aid_type": aid_type,
+                "aid_unit": aid_unit,
+                "amount"  : amount,
+                "location": location,
+                "tx_hash" : result["tx_hash"],
+                "block"   : result["block"]
+            }), 200
+        else:
+            return jsonify({"error": result["error"]}), 500
+    else:
+        # OFFLINE — automatically cache transaction
+        cached = cache_transaction(
+            b_id, amount, aid_type, aid_unit, location,
+            data.get("officer_id", "unknown")
         )
-
-    return jsonify({
-        "message" : "Transaction cached — will sync when online",
-        "cache_id": cached["id"],
-        "aid_type": data["aid_type"].upper(),
-        "aid_unit": data["aid_unit"].upper(),
-        "amount"  : data["amount"],
-        "status"  : "PENDING"
-    }), 200
+        bene = get_beneficiary(b_id)
+        if bene["success"]:
+            send_sms(
+                bene["phone"], bene["name"],
+                amount, f"PENDING-{cached['id']}",
+                aid_type, aid_unit
+            )
+        return jsonify({
+            "message" : "No internet — transaction cached automatically",
+            "mode"    : "OFFLINE",
+            "cache_id": cached["id"],
+            "aid_type": aid_type,
+            "aid_unit": aid_unit,
+            "amount"  : amount,
+            "status"  : "PENDING"
+        }), 200
 
 
 @app.route("/api/sync", methods=["POST"])
@@ -675,6 +643,52 @@ def transaction(tx_id):
 @app.route("/api/transactions/total", methods=["GET"])
 def total_transactions():
     return jsonify(get_total_transactions()), 200
+
+
+@app.route("/api/distributions/history", methods=["GET"])
+def distribution_history():
+    try:
+        total_result = get_total_transactions()
+        total        = total_result.get("total", 0)
+
+        if total == 0:
+            return jsonify({
+                "success"      : True,
+                "total"        : 0,
+                "distributions": []
+            }), 200
+
+        limit  = min(int(request.args.get("limit", 50)), 100)
+        start  = max(1, total - limit + 1)
+
+        distributions = []
+        for tx_id in range(total, start - 1, -1):
+            result = get_transaction(tx_id)
+            if result["success"]:
+                bene = get_beneficiary(result["beneficiary_id"])
+                distributions.append({
+                    "tx_id"           : tx_id,
+                    "beneficiary_id"  : result["beneficiary_id"],
+                    "beneficiary_name": bene["name"]
+                        if bene["success"] else "Unknown",
+                    "amount"          : result["amount"],
+                    "aid_type"        : result["aid_type"],
+                    "aid_unit"        : result["aid_unit"],
+                    "location"        : result["location"],
+                    "cycle"           : result["cycle"],
+                    "officer"         : result["officer"],
+                    "timestamp"       : result["timestamp"],
+                    "status"          : result["status"]
+                })
+
+        return jsonify({
+            "success"      : True,
+            "total"        : total,
+            "distributions": distributions
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ================================================================
