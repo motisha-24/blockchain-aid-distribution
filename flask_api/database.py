@@ -202,3 +202,15 @@ def reactivate_user(username):
     conn.commit()
     conn.close()
     return {"success": True, "message": f"User {username} reactivated"}
+
+# ── Permanently delete a user ─────────────────────────────
+def delete_user_db(username):
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM users WHERE username = ?",
+        (username,)
+    )
+    conn.commit()
+    conn.close()
+    return {"success": True, "message": f"User {username} permanently deleted"}

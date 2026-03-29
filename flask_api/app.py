@@ -42,7 +42,8 @@ from database import (
     create_user,
     update_password,
     deactivate_user,
-    reactivate_user
+    reactivate_user,
+    delete_user_db
 )
 from flask_cors import CORS
 
@@ -175,6 +176,19 @@ def validate(data, rules):
 # ================================================================
 #  AUTH ENDPOINTS
 # ================================================================
+
+# ── Delete user permanently — admin only ──────────────────
+@app.route("/api/auth/users/<username>", methods=["DELETE"])
+def delete_user(username):
+    token = get_token_from_request()
+    user  = verify_token(token)
+    if not user or user["role"] != "ADMIN":
+        return jsonify({"error": "Unauthorised — Admin only"}), 403
+    if username == user["username"]:
+        return jsonify({
+            "error": "Cannot delete your own account"
+        }), 400
+    return jsonify(delete_user_db(username)), 200
 
 @app.route("/api/auth/login", methods=["POST"])
 def login():
