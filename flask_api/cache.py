@@ -10,6 +10,7 @@ import time
 from Crypto.Cipher   import AES
 from Crypto.Util.Padding import pad, unpad
 import hashlib
+from database import release_campaign_budget
 
 # ── Cache file location ───────────────────────────────────────
 CACHE_FILE = os.path.join(
@@ -57,7 +58,8 @@ def save_cache(cache: list):
 # Updated: now stores aid_type, aid_unit and location
 # These are needed when syncing back to blockchain
 def cache_transaction(beneficiary_id, amount, aid_type,
-                      aid_unit, location, officer_id):
+                      aid_unit, location, officer_id,
+                      campaign_id=None):
     cache = load_cache()
 
     # Payload to encrypt — sensitive transaction data
@@ -67,6 +69,7 @@ def cache_transaction(beneficiary_id, amount, aid_type,
         "aid_type"      : aid_type.upper(),
         "aid_unit"      : aid_unit.upper(),
         "location"      : location,
+        "campaign_id"   : campaign_id,
         "timestamp"     : int(time.time())
     }
 
@@ -77,6 +80,7 @@ def cache_transaction(beneficiary_id, amount, aid_type,
         "aid_type"      : aid_type.upper(),
         "aid_unit"      : aid_unit.upper(),
         "location"      : location,
+        "campaign_id"   : campaign_id,
         "officer_id"    : officer_id,
         "timestamp"     : int(time.time()),
         "status"        : "PENDING",
@@ -159,9 +163,9 @@ def sync_pending_to_blockchain():
         result = distribute_aid(
             tx["beneficiary_id"],
             tx["amount"],
-            tx["aid_type"],       # ← was missing before
-            tx["aid_unit"],       # ← was missing before
-            tx["location"]        # ← was missing before
+            tx["aid_type"],
+            tx["aid_unit"],
+            tx["location"]
         )
 
         if result["success"]:
@@ -170,6 +174,8 @@ def sync_pending_to_blockchain():
             print(f"[SYNC] ✓ TX {tx['id']} synced "
                   f"→ Hash: {result['tx_hash'][:20]}...")
         else:
+            if tx.get("campaign_id"):
+                release_campaign_budget(tx["campaign_id"], tx["amount"])
             fail_transaction(tx["id"], result["error"])
             failed += 1
             print(f"[SYNC] ✗ TX {tx['id']} failed "

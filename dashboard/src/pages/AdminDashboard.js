@@ -9,11 +9,12 @@ import StatCard from '../components/StatCard';
 import {
   getStats, advanceCycle,
   getPending, syncCache,
-  getAllBeneficiaries, getDistributionHistory
+  getAllBeneficiaries, getDistributionHistory,
+  getCampaigns, createCampaign
 } from '../services/api';
 import axios from 'axios';
 
-const BASE_URL = 'http://127.0.0.1:5000';
+const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 const roleBadgeColor = {
   ADMIN  : { bg: '#e9d8fd', color: '#553c9a' },
@@ -25,16 +26,19 @@ const roleBadgeColor = {
 const ROLES = ['NGO', 'DONOR', 'AUDITOR', 'ADMIN'];
 
 export default function AdminDashboard() {
-  const [stats,   setStats]   = useState({});
-  const [pending, setPending] = useState([]);
-  const [users,   setUsers]   = useState([]);
-  const [alert,   setAlert]   = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [stats,      setStats]      = useState({});
+  const [pending,    setPending]    = useState([]);
+  const [users,      setUsers]      = useState([]);
+  const [campaigns,  setCampaigns]  = useState([]);
+  const [alert,      setAlert]      = useState(null);
+  const [loading,    setLoading]    = useState(false);
 
   // ── New user form ──────────────────────────────────────────
-  const [newUser,      setNewUser]      = useState({ username:'', password:'', role:'NGO', name:'', email:'' });
-  const [newUserErrors,setNewUserErrors]= useState({});
-  const [showForm,     setShowForm]     = useState(false);
+  const [newUser,         setNewUser]         = useState({ username:'', password:'', role:'NGO', name:'', email:'' });
+  const [newUserErrors,   setNewUserErrors]   = useState({});
+  const [showForm,        setShowForm]        = useState(false);
+  const [newCampaign,     setNewCampaign]     = useState({ name:'', donor_label:'', aid_type:'MAIZE', budget_total:'' });
+  const [newCampaignErrors,setNewCampaignErrors]= useState({});
 
   // ── Stat card modal ────────────────────────────────────────
   const [modal, setModal] = useState(null);
@@ -54,14 +58,16 @@ export default function AdminDashboard() {
 
   const fetchData = async () => {
     try {
-      const [s, p, u] = await Promise.all([
+      const [s, p, u, c] = await Promise.all([
         getStats(),
         getPending(),
-        axios.get(`${BASE_URL}/api/auth/users`, { headers: authHeader })
+        axios.get(`${API_BASE_URL}/api/auth/users`, { headers: authHeader }),
+        getCampaigns()
       ]);
       setStats(s.data);
       setPending(p.data.pending || []);
       setUsers(u.data.users || []);
+      setCampaigns(c.data.campaigns || []);
     } catch {}
   };
 
@@ -160,6 +166,41 @@ export default function AdminDashboard() {
     return errs;
   };
 
+  const validateNewCampaign = () => {
+    const errs = {};
+    if (!newCampaign.name.trim() || newCampaign.name.trim().length < 3)
+      errs.name = "Campaign name must be at least 3 characters";
+    if (!newCampaign.donor_label.trim() || newCampaign.donor_label.trim().length < 2)
+      errs.donor_label = "Donor label must be at least 2 characters";
+    if (!newCampaign.aid_type.trim())
+      errs.aid_type = "Aid type is required";
+    if (!newCampaign.budget_total || Number(newCampaign.budget_total) <= 0)
+      errs.budget_total = "Budget must be a positive number";
+    return errs;
+  };
+
+  const handleCreateCampaign = async () => {
+    const errs = validateNewCampaign();
+    setNewCampaignErrors(errs);
+    if (Object.keys(errs).length > 0) return;
+    setLoading(true);
+    try {
+      await createCampaign({
+        name: newCampaign.name.trim(),
+        donor_label: newCampaign.donor_label.trim(),
+        aid_type: newCampaign.aid_type.trim().toUpperCase(),
+        budget_total: Number(newCampaign.budget_total)
+      });
+      showAlert(`✓ Campaign "${newCampaign.name.trim()}" created`);
+      setNewCampaign({ name:'', donor_label:'', aid_type:'MAIZE', budget_total:'' });
+      setNewCampaignErrors({});
+      fetchData();
+    } catch (e) {
+      showAlert(e.response?.data?.error || 'Failed to create campaign', 'error');
+    }
+    setLoading(false);
+  };
+
   const handleCreateUser = async () => {
     const errs = validateNewUser();
     setNewUserErrors(errs);
@@ -167,7 +208,7 @@ export default function AdminDashboard() {
     setLoading(true);
     try {
       await axios.post(
-        `${BASE_URL}/api/auth/users/create`,
+        `${API_BASE_URL}/api/auth/users/create`,
         { ...newUser, username: newUser.username.trim(), name: newUser.name.trim() },
         { headers: authHeader }
       );
@@ -186,7 +227,7 @@ export default function AdminDashboard() {
     if (!window.confirm(`Deactivate "${username}"?\nThey will not be able to log in.`)) return;
     try {
       await axios.post(
-        `${BASE_URL}/api/auth/users/${username}/deactivate`,
+        `${API_BASE_URL}/api/auth/users/${username}/deactivate`,
         {}, { headers: authHeader }
       );
       showAlert(`✓ "${username}" deactivated`);
@@ -199,7 +240,7 @@ export default function AdminDashboard() {
   const handleReactivate = async (username) => {
     try {
       await axios.post(
-        `${BASE_URL}/api/auth/users/${username}/reactivate`,
+        `${API_BASE_URL}/api/auth/users/${username}/reactivate`,
         {}, { headers: authHeader }
       );
       showAlert(`✓ "${username}" reactivated`);
@@ -218,7 +259,7 @@ export default function AdminDashboard() {
     )) return;
     try {
       await axios.delete(
-        `${BASE_URL}/api/auth/users/${username}`,
+        `${API_BASE_URL}/api/auth/users/${username}`,
         { headers: authHeader }
       );
       showAlert(`✓ User "${username}" permanently deleted`);
@@ -521,6 +562,116 @@ export default function AdminDashboard() {
         </div>
       </div>
 
+      {/* Campaign Management */}
+      <div className="card">
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
+          <h3 style={{ margin:0, padding:0, borderBottom:'none' }}>🎯 Campaign Management</h3>
+          <button className="btn btn-primary btn-sm"
+            onClick={() => {
+              setNewCampaignErrors({});
+              setNewCampaign({ name:'', donor_label:'', aid_type:'MAIZE', budget_total:'' });
+            }}>
+            + New Campaign
+          </button>
+        </div>
+
+        <div style={{ display:'grid', gap:'16px' }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' }}>
+            <div className="form-group">
+              <label>Campaign Name</label>
+              <input placeholder="e.g. Winter Food Aid"
+                value={newCampaign.name}
+                style={inputStyle(newCampaignErrors.name)}
+                onChange={e => {
+                  setNewCampaign({...newCampaign, name: e.target.value});
+                  setNewCampaignErrors({...newCampaignErrors, name:''});
+                }}/>
+              {newCampaignErrors.name && <div style={errStyle}>⚠ {newCampaignErrors.name}</div>}
+            </div>
+            <div className="form-group">
+              <label>Donor Label</label>
+              <input placeholder="e.g. Acme Foundation"
+                value={newCampaign.donor_label}
+                style={inputStyle(newCampaignErrors.donor_label)}
+                onChange={e => {
+                  setNewCampaign({...newCampaign, donor_label: e.target.value});
+                  setNewCampaignErrors({...newCampaignErrors, donor_label:''});
+                }}/>
+              {newCampaignErrors.donor_label && <div style={errStyle}>⚠ {newCampaignErrors.donor_label}</div>}
+            </div>
+            <div className="form-group">
+              <label>Aid Type</label>
+              <select value={newCampaign.aid_type}
+                style={inputStyle(newCampaignErrors.aid_type)}
+                onChange={e => {
+                  setNewCampaign({...newCampaign, aid_type: e.target.value});
+                  setNewCampaignErrors({...newCampaignErrors, aid_type:''});
+                }}>
+                {['MAIZE','CASH','OIL','SEEDS','CLOTHES','FERTILISER','BLANKETS'].map(type => (
+                  <option key={type} value={type}>{type}</option>
+                ))}
+              </select>
+              {newCampaignErrors.aid_type && <div style={errStyle}>⚠ {newCampaignErrors.aid_type}</div>}
+            </div>
+            <div className="form-group">
+              <label>Budget Total</label>
+              <input type="number" placeholder="e.g. 1000"
+                value={newCampaign.budget_total}
+                style={inputStyle(newCampaignErrors.budget_total)}
+                onChange={e => {
+                  setNewCampaign({...newCampaign, budget_total: e.target.value});
+                  setNewCampaignErrors({...newCampaignErrors, budget_total:''});
+                }}/>
+              {newCampaignErrors.budget_total && <div style={errStyle}>⚠ {newCampaignErrors.budget_total}</div>}
+            </div>
+          </div>
+
+          <button className="btn btn-primary" onClick={handleCreateCampaign} disabled={loading}>
+            {loading ? 'Creating campaign...' : '✓ Create Campaign'}
+          </button>
+        </div>
+
+        <div style={{ marginTop:'24px' }}>
+          <div style={{ fontSize:'14px', fontWeight:700, marginBottom:'12px' }}>
+            Active Campaigns ({campaigns.length})
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th><th>Name</th><th>Donor</th><th>Aid Type</th>
+                  <th>Budget Total</th><th>Budget Used</th><th>Remaining</th><th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {campaigns.length > 0 ? campaigns.map(c => (
+                  <tr key={c.id}>
+                    <td>#{c.id}</td>
+                    <td>{c.name}</td>
+                    <td>{c.donor_label}</td>
+                    <td><span className="badge badge-blue">{c.aid_type}</span></td>
+                    <td>{c.budget_total}</td>
+                    <td>{c.budget_used}</td>
+                    <td>{c.remaining}</td>
+                    <td>
+                      <span className={`badge ${c.active ? 'badge-green' : 'badge-red'}`}>
+                        {c.active ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={8} style={{ textAlign:'center', color:'#a0aec0', padding:'24px' }}>
+                      No campaigns available yet
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       {/* System Health */}
       <div className="card">
         <h3>🔧 System Health</h3>
@@ -530,6 +681,7 @@ export default function AdminDashboard() {
           ['Current Cycle',   `Cycle ${stats.current_cycle}`],
           ['Total TX',         stats.total_transactions],
           ['Pending Cache',   `${stats.pending_cache || 0} transactions`],
+          ['Active Campaigns', stats.total_campaigns || 0],
           ['System Users',     users.length],
         ].map(([label, value]) => (
           <div key={label} style={{

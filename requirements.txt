@@ -3,3 +3,5 @@ web3
 python-dotenv
 pycryptodome
 firebase-admin
+Flask-Limiter
+PyJWT

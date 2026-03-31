@@ -12,7 +12,7 @@ import {
   getPending, syncCache,
   getBeneficiary, deactivateBeneficiary,
   reactivateBeneficiary, getAllBeneficiaries,
-  getDistributionHistory
+  getDistributionHistory, getCampaigns
 } from '../services/api';
 
 const AID_TYPES = [
@@ -26,10 +26,11 @@ const AID_TYPES = [
 ];
 
 export default function NGODashboard() {
-  const [stats,   setStats]   = useState({});
-  const [pending, setPending] = useState([]);
-  const [alert,   setAlert]   = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [stats,      setStats]      = useState({});
+  const [pending,    setPending]    = useState([]);
+  const [alert,      setAlert]      = useState(null);
+  const [loading,    setLoading]    = useState(false);
+  const [campaigns,  setCampaigns]  = useState([]);
 
   // ── Registration form ──────────────────────────────────────
   const [regForm, setRegForm] = useState({
@@ -41,7 +42,8 @@ export default function NGODashboard() {
   // ── Distribution form ──────────────────────────────────────
   const [distForm, setDistForm] = useState({
     beneficiary_id: '', amount: '',
-    aid_type: 'MAIZE', aid_unit: 'KG', location: ''
+    aid_type: 'MAIZE', aid_unit: 'KG', location: '',
+    campaign_id: ''
   });
   const [distErrors, setDistErrors] = useState({});
 
@@ -65,9 +67,12 @@ export default function NGODashboard() {
   useEffect(() => {
     const fetchInitial = async () => {
       try {
-        const [s, p] = await Promise.all([getStats(), getPending()]);
+        const [s, p, c] = await Promise.all([
+          getStats(), getPending(), getCampaigns()
+        ]);
         setStats(s.data);
         setPending(p.data.pending || []);
+        setCampaigns(c.data.campaigns || []);
       } catch {}
     };
     fetchInitial();
@@ -77,9 +82,12 @@ export default function NGODashboard() {
 
   const refreshData = async () => {
     try {
-      const [s, p] = await Promise.all([getStats(), getPending()]);
+      const [s, p, c] = await Promise.all([
+        getStats(), getPending(), getCampaigns()
+      ]);
       setStats(s.data);
       setPending(p.data.pending || []);
+      setCampaigns(c.data.campaigns || []);
     } catch {}
   };
 
@@ -92,8 +100,11 @@ export default function NGODashboard() {
   const handleAidTypeChange = (e) => {
     const selected = AID_TYPES.find(a => a.type === e.target.value);
     setDistForm({ ...distForm,
-      aid_type: selected.type, aid_unit: selected.unit });
-    setDistErrors({ ...distErrors, aid_type: '' });
+      aid_type: selected.type,
+      aid_unit: selected.unit,
+      campaign_id: ''
+    });
+    setDistErrors({ ...distErrors, aid_type: '', campaign_id: '' });
   };
 
   // ================================================================
@@ -173,6 +184,19 @@ export default function NGODashboard() {
       errors.location = "Location cannot exceed 100 characters";
     }
 
+    if (distForm.campaign_id) {
+      const campaign = campaigns.find(c => String(c.id) === String(distForm.campaign_id));
+      if (!campaign) {
+        errors.campaign_id = "Selected campaign is invalid";
+      } else if (!campaign.active) {
+        errors.campaign_id = "Selected campaign is not active";
+      } else if (campaign.aid_type !== distForm.aid_type) {
+        errors.campaign_id = "Selected campaign does not match aid type";
+      } else if (parseInt(distForm.amount) > campaign.remaining) {
+        errors.campaign_id = "Selected campaign does not have enough remaining budget";
+      }
+    }
+
     return errors;
   };
 
@@ -233,21 +257,27 @@ export default function NGODashboard() {
     }
     setLoading(true);
     try {
-      const res = await distributeAid({
+      const payload = {
         beneficiary_id: parseInt(distForm.beneficiary_id),
         amount:         parseInt(distForm.amount),
         aid_type:       distForm.aid_type,
         aid_unit:       distForm.aid_unit,
         location:       distForm.location.trim()
-      });
+      };
+      if (distForm.campaign_id) {
+        payload.campaign_id = parseInt(distForm.campaign_id);
+      }
+      const res = await distributeAid(payload);
       showAlert(
         `✓ ${distForm.amount} ${distForm.aid_unit} of ` +
-        `${distForm.aid_type} distributed. ` +
+        `${distForm.aid_type} distributed` +
+        `${distForm.campaign_id ? ` via campaign #${distForm.campaign_id}` : ''}. ` +
         `TX: ${res.data.tx_hash?.slice(0, 14)}...`
       );
       setDistForm({
         beneficiary_id: '', amount: '',
-        aid_type: 'MAIZE', aid_unit: 'KG', location: ''
+        aid_type: 'MAIZE', aid_unit: 'KG', location: '',
+        campaign_id: ''
       });
       setDistErrors({});
       refreshData();
@@ -362,6 +392,10 @@ export default function NGODashboard() {
       (listFilter === 'INACTIVE' && !b.active);
     return matchSearch && matchFilter;
   });
+
+  const availableCampaigns = campaigns.filter(c =>
+    c.active && c.aid_type === distForm.aid_type && c.remaining > 0
+  );
 
   // ================================================================
   //  DISTRIBUTION HISTORY
@@ -628,6 +662,27 @@ export default function NGODashboard() {
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="form-group">
+            <label>Campaign (optional)</label>
+            <select value={distForm.campaign_id}
+              onChange={e => setDistForm({ ...distForm, campaign_id: e.target.value })}
+              style={inputStyle(distErrors.campaign_id)}>
+              <option value="">No campaign</option>
+              {availableCampaigns.map(c => (
+                <option key={c.id} value={c.id}>
+                  #{c.id} {c.name} — remaining {c.remaining}
+                </option>
+              ))}
+            </select>
+            {distErrors.campaign_id &&
+              <div style={errStyle}>⚠ {distErrors.campaign_id}</div>}
+            {availableCampaigns.length === 0 && (
+              <div style={{ fontSize: '11px', color: '#718096', marginTop: '6px' }}>
+                No active campaigns matching the selected aid type.
+              </div>
+            )}
           </div>
 
           <div className="form-group">

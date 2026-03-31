@@ -10,9 +10,14 @@ import re
 import hashlib
 import time
 import threading
+import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from dotenv import load_dotenv
 from flask import Flask, request, jsonify
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+import jwt
 from blockchain import (
     register_beneficiary,
     distribute_aid,
@@ -43,12 +48,27 @@ from database import (
     update_password,
     deactivate_user,
     reactivate_user,
-    delete_user_db
+    delete_user_db,
+    create_campaign,
+    get_campaign,
+    list_campaigns,
+    reserve_campaign_budget,
+    release_campaign_budget
 )
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
+
+load_dotenv()
+
+JWT_SECRET = os.getenv("JWT_SECRET", "AidDistributionJWTSecret2026")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_EXP_DELTA_SECONDS = int(os.getenv("JWT_EXP_DELTA_SECONDS", "3600"))
+
+limiter = Limiter(key_func=get_remote_address)
+limiter.init_app(app)
+REVOKED_TOKENS = set()
 
 # Initialise SQLite database on startup
 init_database()
@@ -86,21 +106,30 @@ print("[AUTO-SYNC] Background sync thread started — checks every 30s")
 #  TOKEN MANAGEMENT
 # ================================================================
 
-ACTIVE_TOKENS = {}
-
-
 def generate_token(username, role):
-    raw   = f"{username}{role}{time.time()}"
-    token = hashlib.sha256(raw.encode()).hexdigest()
-    ACTIVE_TOKENS[token] = {
-        "username": username,
-        "role"    : role
+    payload = {
+        "sub": username,
+        "role": role,
+        "iat": datetime.datetime.utcnow(),
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(seconds=JWT_EXP_DELTA_SECONDS)
     }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return token
 
 
 def verify_token(token):
-    return ACTIVE_TOKENS.get(token)
+    if not token or token in REVOKED_TOKENS:
+        return None
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return {
+            "username": payload.get("sub"),
+            "role": payload.get("role")
+        }
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
 
 
 def get_token_from_request():
@@ -191,6 +220,7 @@ def delete_user(username):
     return jsonify(delete_user_db(username)), 200
 
 @app.route("/api/auth/login", methods=["POST"])
+@limiter.limit("5/minute")
 def login():
     data     = request.get_json()
     username = data.get("username", "").strip()
@@ -226,10 +256,8 @@ def login():
 @app.route("/api/auth/logout", methods=["POST"])
 def logout():
     token = get_token_from_request()
-    if token in ACTIVE_TOKENS:
-        username = ACTIVE_TOKENS[token].get("username")
-        del ACTIVE_TOKENS[token]
-        print(f"[AUTH] Logout: {username}")
+    if token:
+        REVOKED_TOKENS.add(token)
     return jsonify({"success": True, "message": "Logged out"}), 200
 
 
@@ -256,6 +284,7 @@ def get_users():
 
 
 @app.route("/api/auth/users/create", methods=["POST"])
+@limiter.limit("10/minute")
 def create_new_user():
     token = get_token_from_request()
     user  = verify_token(token)
@@ -285,6 +314,51 @@ def create_new_user():
         data["role"].upper(),
         data["name"].strip(),
         data.get("email", "").strip()
+    )
+    return jsonify(result), 201 if result["success"] else 400
+
+
+@app.route("/api/campaigns", methods=["GET"])
+def campaigns_list():
+    token = get_token_from_request()
+    user  = verify_token(token)
+    if not user or user["role"] not in ["ADMIN", "NGO"]:
+        return jsonify({"error": "Unauthorised — Admin or NGO only"}), 403
+    return jsonify(list_campaigns()), 200
+
+
+@app.route("/api/campaign/<int:campaign_id>", methods=["GET"])
+def campaign_details(campaign_id):
+    token = get_token_from_request()
+    user  = verify_token(token)
+    if not user or user["role"] not in ["ADMIN", "NGO"]:
+        return jsonify({"error": "Unauthorised — Admin or NGO only"}), 403
+    return jsonify(get_campaign(campaign_id)), 200
+
+
+@app.route("/api/campaign/create", methods=["POST"])
+def create_new_campaign():
+    token = get_token_from_request()
+    user  = verify_token(token)
+    if not user or user["role"] != "ADMIN":
+        return jsonify({"error": "Unauthorised — Admin only"}), 403
+
+    data = request.get_json()
+    errors = validate(data, {
+        "name": {"required": True, "type": "str", "min": 3, "max": 100},
+        "donor_label": {"required": True, "type": "str", "min": 2, "max": 100},
+        "aid_type": {"required": True, "type": "str", "min": 2, "max": 50},
+        "budget_total": {"required": True, "type": "int", "min": 1}
+    })
+
+    if errors:
+        return jsonify({"error": " | ".join(errors)}), 400
+
+    result = create_campaign(
+        data["name"].strip(),
+        data["donor_label"].strip(),
+        data["aid_type"].strip(),
+        int(data["budget_total"])
     )
     return jsonify(result), 201 if result["success"] else 400
 
@@ -409,6 +483,7 @@ def index():
 # ================================================================
 
 @app.route("/api/beneficiary/register", methods=["POST"])
+@limiter.limit("10/minute")
 def register():
     data   = request.get_json()
     errors = validate(data, {
@@ -544,6 +619,7 @@ def get_all_beneficiaries():
 # ================================================================
 
 @app.route("/api/distribute", methods=["POST"])
+@limiter.limit("15/minute")
 def distribute():
     data   = request.get_json()
     errors = validate(data, {
@@ -557,11 +633,32 @@ def distribute():
     if errors:
         return jsonify({"error": " | ".join(errors)}), 400
 
-    b_id     = int(data["beneficiary_id"])
-    amount   = int(data["amount"])
-    aid_type = data["aid_type"].upper().strip()
-    aid_unit = data["aid_unit"].upper().strip()
-    location = data["location"].strip()
+    b_id       = int(data["beneficiary_id"])
+    amount     = int(data["amount"])
+    aid_type   = data["aid_type"].upper().strip()
+    aid_unit   = data["aid_unit"].upper().strip()
+    location   = data["location"].strip()
+    campaign_id = data.get("campaign_id")
+
+    if campaign_id is not None and campaign_id != "":
+        try:
+            campaign_id = int(campaign_id)
+        except (ValueError, TypeError):
+            return jsonify({"error": "campaign_id must be a valid number"}), 400
+    else:
+        campaign_id = None
+
+    if campaign_id:
+        campaign_res = get_campaign(campaign_id)
+        if not campaign_res["success"]:
+            return jsonify({"error": campaign_res["error"]}), 400
+        campaign = campaign_res["campaign"]
+        if not campaign["active"]:
+            return jsonify({"error": "Campaign is inactive"}), 400
+        if campaign["aid_type"] != aid_type:
+            return jsonify({"error": "Selected campaign does not match the chosen aid type"}), 400
+        if amount > campaign["remaining"]:
+            return jsonify({"error": "Selected campaign does not have enough remaining budget"}), 400
 
     # ── Duplicate check ───────────────────────────────────────
     check = has_collected(b_id, aid_type)
@@ -573,7 +670,11 @@ def distribute():
 
     # ── AUTO detect internet and route accordingly ────────────
     if w3.is_connected():
-        # ONLINE — send directly to blockchain
+        if campaign_id:
+            reserve = reserve_campaign_budget(campaign_id, amount)
+            if not reserve["success"]:
+                return jsonify({"error": reserve["error"]}), 400
+
         result = distribute_aid(b_id, amount, aid_type, aid_unit, location)
 
         if result["success"]:
@@ -585,22 +686,30 @@ def distribute():
                     aid_type, aid_unit
                 )
             return jsonify({
-                "message" : "Aid distributed successfully",
-                "mode"    : "ONLINE",
-                "aid_type": aid_type,
-                "aid_unit": aid_unit,
-                "amount"  : amount,
-                "location": location,
-                "tx_hash" : result["tx_hash"],
-                "block"   : result["block"]
+                "message"     : "Aid distributed successfully",
+                "mode"        : "ONLINE",
+                "aid_type"    : aid_type,
+                "aid_unit"    : aid_unit,
+                "amount"      : amount,
+                "location"    : location,
+                "campaign_id" : campaign_id,
+                "tx_hash"     : result["tx_hash"],
+                "block"       : result["block"]
             }), 200
         else:
+            if campaign_id:
+                release_campaign_budget(campaign_id, amount)
             return jsonify({"error": result["error"]}), 500
     else:
-        # OFFLINE — automatically cache transaction
+        if campaign_id:
+            reserve = reserve_campaign_budget(campaign_id, amount)
+            if not reserve["success"]:
+                return jsonify({"error": reserve["error"]}), 400
+
         cached = cache_transaction(
             b_id, amount, aid_type, aid_unit, location,
-            data.get("officer_id", "unknown")
+            data.get("officer_id", "unknown"),
+            campaign_id
         )
         bene = get_beneficiary(b_id)
         if bene["success"]:
@@ -610,13 +719,14 @@ def distribute():
                 aid_type, aid_unit
             )
         return jsonify({
-            "message" : "No internet — transaction cached automatically",
-            "mode"    : "OFFLINE",
-            "cache_id": cached["id"],
-            "aid_type": aid_type,
-            "aid_unit": aid_unit,
-            "amount"  : amount,
-            "status"  : "PENDING"
+            "message"     : "No internet — transaction cached automatically",
+            "mode"        : "OFFLINE",
+            "cache_id"    : cached["id"],
+            "aid_type"    : aid_type,
+            "aid_unit"    : aid_unit,
+            "amount"      : amount,
+            "campaign_id" : campaign_id,
+            "status"      : "PENDING"
         }), 200
 
 
@@ -774,17 +884,19 @@ def sms_log():
 
 @app.route("/api/stats", methods=["GET"])
 def stats():
-    total_tx    = get_total_transactions()
-    total_benes = get_total_beneficiaries()
-    cycle       = get_current_cycle()
-    pending_txs = get_pending()
+    total_tx      = get_total_transactions()
+    total_benes   = get_total_beneficiaries()
+    cycle         = get_current_cycle()
+    pending_txs   = get_pending()
+    campaigns_res = list_campaigns()
 
     return jsonify({
         "blockchain_online"  : w3.is_connected(),
         "current_cycle"      : cycle.get("cycle", 0),
         "total_transactions" : total_tx.get("total", 0),
         "total_beneficiaries": total_benes.get("total", 0),
-        "pending_cache"      : len(pending_txs)
+        "pending_cache"      : len(pending_txs),
+        "total_campaigns"    : len(campaigns_res.get("campaigns", []))
     }), 200
 
 

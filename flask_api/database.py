@@ -44,6 +44,20 @@ def init_database():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS campaigns (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT    NOT NULL,
+            donor_label  TEXT    NOT NULL,
+            aid_type     TEXT    NOT NULL,
+            budget_total INTEGER NOT NULL,
+            budget_used  INTEGER NOT NULL DEFAULT 0,
+            active       INTEGER NOT NULL DEFAULT 1,
+            created_at   TEXT    NOT NULL,
+            updated_at   TEXT    NOT NULL
+        )
+    """)
+
     conn.commit()
 
     # ── Seed default users if table is empty ─────────────────
@@ -190,6 +204,120 @@ def deactivate_user(username):
     conn.close()
     return {"success": True, "message": f"User {username} deactivated"}
 
+VALID_AID_TYPES = [
+    "MAIZE", "CASH", "OIL", "SEEDS",
+    "CLOTHES", "FERTILISER", "BLANKETS"
+]
+
+
+def create_campaign(name, donor_label, aid_type, budget_total):
+    aid_type_up = aid_type.strip().upper()
+    if aid_type_up not in VALID_AID_TYPES:
+        return {"success": False, "error": f"Unknown aid type: {aid_type}"}
+    if budget_total <= 0:
+        return {"success": False, "error": "Campaign budget must be positive"}
+
+    conn   = get_connection()
+    cursor = conn.cursor()
+    now    = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        cursor.execute("""
+            INSERT INTO campaigns
+            (name, donor_label, aid_type, budget_total, budget_used,
+             active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, 1, ?, ?)
+        """, (
+            name.strip(), donor_label.strip(), aid_type_up,
+            budget_total, now, now
+        ))
+        conn.commit()
+        campaign_id = cursor.lastrowid
+        conn.close()
+        return {"success": True, "campaign_id": campaign_id}
+    except Exception as e:
+        conn.close()
+        return {"success": False, "error": str(e)}
+
+
+def get_campaign(campaign_id):
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM campaigns WHERE id = ?",
+        (campaign_id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {"success": False, "error": "Campaign not found"}
+    campaign = dict(row)
+    campaign["remaining"] = campaign["budget_total"] - campaign["budget_used"]
+    return {"success": True, "campaign": campaign}
+
+
+def list_campaigns():
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM campaigns ORDER BY id DESC"
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    campaigns = []
+    for row in rows:
+        campaign = dict(row)
+        campaign["remaining"] = campaign["budget_total"] - campaign["budget_used"]
+        campaigns.append(campaign)
+    return {"success": True, "campaigns": campaigns}
+
+
+def reserve_campaign_budget(campaign_id, amount):
+    if amount <= 0:
+        return {"success": False, "error": "Amount must be positive"}
+
+    campaign_res = get_campaign(campaign_id)
+    if not campaign_res["success"]:
+        return campaign_res
+    campaign = campaign_res["campaign"]
+    if not campaign["active"]:
+        return {"success": False, "error": "Campaign is inactive"}
+
+    remaining = campaign["remaining"]
+    if amount > remaining:
+        return {"success": False, "error": "Campaign budget exceeded"}
+
+    conn   = get_connection()
+    cursor = conn.cursor()
+    now    = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute(
+        "UPDATE campaigns SET budget_used = budget_used + ?, updated_at = ? WHERE id = ?",
+        (amount, now, campaign_id)
+    )
+    conn.commit()
+    conn.close()
+    return {"success": True}
+
+
+def release_campaign_budget(campaign_id, amount):
+    if amount <= 0:
+        return {"success": False, "error": "Amount must be positive"}
+
+    campaign_res = get_campaign(campaign_id)
+    if not campaign_res["success"]:
+        return campaign_res
+    campaign = campaign_res["campaign"]
+    new_used = max(0, campaign["budget_used"] - amount)
+
+    conn   = get_connection()
+    cursor = conn.cursor()
+    now    = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute(
+        "UPDATE campaigns SET budget_used = ?, updated_at = ? WHERE id = ?",
+        (new_used, now, campaign_id)
+    )
+    conn.commit()
+    conn.close()
+    return {"success": True}
 
 # ── Reactivate user account ───────────────────────────────────
 def reactivate_user(username):

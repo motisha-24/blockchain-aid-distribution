@@ -6,7 +6,7 @@
 
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { loginUser } from '../services/api';
 
 export default function LoginPage() {
   const navigate  = useNavigate();
@@ -52,13 +52,10 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      const res = await axios.post(
-        'http://127.0.0.1:5000/api/auth/login',
-        {
-          username: form.username.trim(),
-          password: form.password
-        }
-      );
+      const res = await loginUser({
+        username: form.username.trim(),
+        password: form.password
+      });
 
       const { token, role, name, username } = res.data;
 

@@ -6,7 +6,7 @@
 
 import axios from 'axios';
 
-const BASE_URL = 'http://127.0.0.1:5000';
+const BASE_URL = process.env.REACT_APP_API_URL || '';
 
 const api = axios.create({
   baseURL: BASE_URL,
@@ -64,6 +64,9 @@ export const getSystemInfo  = () => api.get('/');
 export const getCurrentCycle = () => api.get('/api/cycle');
 export const advanceCycle   = () => api.post('/api/cycle/advance');
 
+export const getCampaigns = () => api.get('/api/campaigns');
+export const getCampaign  = (id) => api.get(`/api/campaign/${id}`);
+export const createCampaign = (data) => api.post('/api/campaign/create', data);
 
 // ── Beneficiary ──────────────────────────────────────────────
 export const registerBeneficiary = (data) =>
