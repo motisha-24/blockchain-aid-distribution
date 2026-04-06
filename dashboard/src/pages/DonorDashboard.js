@@ -36,27 +36,45 @@ export default function DonorDashboard() {
     } catch {}
   };
 
-  // Build aid type distribution from SMS log
-  const aidTypeData = smsLog.reduce((acc, entry) => {
-    const match = entry.match(/(\d+)\s+(\w+)\s+of\s+(\w+)/);
-    if (match) {
-      const type = match[3];
-      const existing = acc.find(a => a.name === type);
-      if (existing) existing.value += parseInt(match[1]);
-      else acc.push({ name: type, value: parseInt(match[1]) });
-    }
-    return acc;
-  }, []);
+  // Build aid type distribution from stats data
+  const aidTypeData = Array.isArray(stats.aid_type_breakdown)
+    ? stats.aid_type_breakdown.map(entry => {
+        // Handle both string and object formats
+        if (typeof entry === 'string') {
+          const match = entry.match(/(\d+)\s+(\w+)\s+of\s+(\w+)/);
+          return match ? {
+            name: match[3],
+            value: parseInt(match[1])
+          } : null;
+        } else if (typeof entry === 'object' && entry.name && entry.value) {
+          return {
+            name: entry.name,
+            value: parseInt(entry.value)
+          };
+        }
+        return null;
+      }).filter(Boolean)
+    : [];
 
-  // Build per-SMS bar chart data (last 10)
-  const recentActivity = smsLog.slice(-10).map((entry, i) => {
-    const match = entry.match(/(\d+)\s+(\w+)\s+of\s+(\w+)/);
-    return {
-      name:   `TX${i + 1}`,
-      amount: match ? parseInt(match[1]) : 0,
-      type:   match ? match[3] : 'UNKNOWN'
-    };
-  });
+  // Build recent activity from stats data
+  const recentActivity = Array.isArray(stats.recent_activity)
+    ? stats.recent_activity.map((entry, i) => {
+        // Handle both string and object formats
+        if (typeof entry === 'string') {
+          const match = entry.match(/(\d+)\s+(\w+)\s+of\s+(\w+)/);
+          return match ? {
+            name: match[3],
+            amount: parseInt(match[1])
+          } : null;
+        } else if (typeof entry === 'object' && entry.name && entry.amount) {
+          return {
+            name: entry.name,
+            amount: parseInt(entry.amount)
+          };
+        }
+        return null;
+      }).filter(Boolean)
+    : [];
 
   return (
     <div className="page">

@@ -11,6 +11,7 @@ import hashlib
 import time
 import threading
 import datetime
+import json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dotenv import load_dotenv
@@ -58,17 +59,40 @@ from database import (
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=[
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://your-dashboard-domain.com"  # Replace with actual domain
+])
 
 load_dotenv()
 
-JWT_SECRET = os.getenv("JWT_SECRET", "AidDistributionJWTSecret2026")
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    print("[ERROR] JWT_SECRET not set in environment variables")
+    exit(1)
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-JWT_EXP_DELTA_SECONDS = int(os.getenv("JWT_EXP_DELTA_SECONDS", "3600"))
+JWT_EXP_DELTA_SECONDS = int(os.getenv("JWT_EXP_DELTA_SECONDS", "1800"))  # 30 minutes default
 
 limiter = Limiter(key_func=get_remote_address)
 limiter.init_app(app)
+REVOKED_TOKENS_FILE = os.path.join(os.path.dirname(__file__), "revoked_tokens.json")
 REVOKED_TOKENS = set()
+
+def load_revoked_tokens():
+    global REVOKED_TOKENS
+    if os.path.exists(REVOKED_TOKENS_FILE):
+        try:
+            with open(REVOKED_TOKENS_FILE, 'r') as f:
+                REVOKED_TOKENS = set(json.load(f))
+        except:
+            REVOKED_TOKENS = set()
+
+def save_revoked_tokens():
+    with open(REVOKED_TOKENS_FILE, 'w') as f:
+        json.dump(list(REVOKED_TOKENS), f)
+
+load_revoked_tokens()
 
 # Initialise SQLite database on startup
 init_database()
@@ -258,6 +282,7 @@ def logout():
     token = get_token_from_request()
     if token:
         REVOKED_TOKENS.add(token)
+        save_revoked_tokens()
     return jsonify({"success": True, "message": "Logged out"}), 200
 
 

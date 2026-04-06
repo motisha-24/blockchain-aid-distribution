@@ -5,3 +5,4 @@ pycryptodome
 firebase-admin
 Flask-Limiter
 PyJWT
+bcrypt

@@ -12,7 +12,7 @@ load_dotenv()
 # ── MODE SWITCH ──────────────────────────────────────────────────
 # Change to "CLOUD" when using Alchemy Sepolia
 # Change to "LOCAL" when using Ganache
-MODE = "CLOUD"
+MODE = os.getenv("MODE", "LOCAL")
 
 # ── Local Ganache Settings ───────────────────────────────────────
 LOCAL_RPC              = os.getenv("LOCAL_RPC", "http://127.0.0.1:7545")
@@ -27,7 +27,10 @@ CLOUD_AID_ADDRESS      = os.getenv("CLOUD_AID_ADDRESS")
 CLOUD_CHAIN_ID         = 11155111
 
 # ── Wallet ────────────────────────────────────────────────────────
-PRIVATE_KEY = os.getenv("PRIVATE_KEY")
+if MODE == "LOCAL":
+    PRIVATE_KEY = os.getenv("LOCAL_PRIVATE_KEY")
+else:
+    PRIVATE_KEY = os.getenv("PRIVATE_KEY")
 
 # ── Auto select based on MODE ────────────────────────────────────
 if MODE == "LOCAL":

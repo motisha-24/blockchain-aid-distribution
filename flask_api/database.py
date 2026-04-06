@@ -8,6 +8,7 @@ import sqlite3
 import hashlib
 import os
 import datetime
+import bcrypt
 
 # ── Database file location ────────────────────────────────────
 DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
@@ -15,7 +16,9 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
 
 # ── Hash password ─────────────────────────────────────────────
 def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+    return hashed.decode('utf-8')
 
 
 # ── Get database connection ───────────────────────────────────
@@ -113,7 +116,7 @@ def verify_login(username: str, password: str):
     user = get_user(username)
     if not user:
         return None
-    if user["password"] != hash_password(password):
+    if not bcrypt.checkpw(password.encode('utf-8'), user["password"].encode('utf-8')):
         return None
     return user
 

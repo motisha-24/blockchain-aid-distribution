@@ -44,56 +44,100 @@ ESP32 + R307 Fingerprint Sensor
 
 ---
 
-## Installation — Local Development
+## Installation — Dual Network Support
+
+AidChain supports both **LOCAL development** (Ganache) and **CLOUD production** (Sepolia) networks.
 
 ### Prerequisites
 - Python 3.10+
 - Node.js v18+
-- Ganache
-- Truffle
+- Truffle Suite
+- Ganache (for local development)
 
-### Step 1 — Clone the repository
+### Quick Setup (Recommended)
+
+#### Option 1: Local Development (Ganache)
 ```bash
-git clone https://github.com/YourUsername/blockchain-aid-distribution.git
-cd blockchain-aid-distribution
+# One-command setup for local development
+setup-blockchain.bat
 ```
 
-### Step 2 — Install Python dependencies
+This will:
+- Install all dependencies
+- Start Ganache blockchain
+- Deploy contracts to local network
+- Save contract addresses
+
+#### Option 2: Cloud Production (Sepolia)
 ```bash
-pip install flask web3 python-dotenv pycryptodome firebase-admin flask-cors
+# Install dependencies
+npm install
+
+# Deploy to Sepolia testnet
+npm run deploy:sepolia
 ```
 
-### Step 3 — Install Node dependencies
+### Manual Setup
+
+#### Step 1 — Install Dependencies
 ```bash
-npm install -g truffle
-cd dashboard && npm install
+# Python dependencies
+pip install -r flask_api/requirements.txt
+
+# Blockchain dependencies
+npm install
 ```
 
-### Step 4 — Configure environment
-Create a `.env` file in the root folder:
-```
-LOCAL_RPC=http://127.0.0.1:7545
-LOCAL_REGISTRY_ADDRESS=your_registry_contract_address
-LOCAL_AID_ADDRESS=your_aid_contract_address
-PRIVATE_KEY=your_ganache_account_private_key
-```
+#### Step 2 — Configure Environment
+Copy and configure environment files:
 
-### Step 5 — Deploy smart contracts
+**For Local Development:**
 ```bash
-truffle compile
-truffle migrate --network development
+cd flask_api
+cp .env.example .env
+# Edit .env to set MODE=LOCAL
 ```
 
-### Step 6 — Start the system
-Open three terminals:
+**For Cloud Production:**
 ```bash
-# Terminal 1 — Start Ganache (open the app)
+cd flask_api
+cp .env.example .env
+# Edit .env to set MODE=CLOUD
+# Add your INFURA_URL and PRIVATE_KEY
+```
 
-# Terminal 2 — Start Flask API
-python flask_api/app.py
+#### Step 3 — Deploy Smart Contracts
 
-# Terminal 3 — Start React Dashboard
+**Local Network:**
+```bash
+# Start Ganache first
+npm run ganache
+
+# Deploy contracts
+npm run deploy:local
+```
+
+**Sepolia Network:**
+```bash
+# Deploy to testnet
+npm run deploy:sepolia
+```
+
+#### Step 4 — Update Contract Addresses
+After deployment, update your `.env` file with the deployed addresses from:
+- `deployed-addresses-development.json` (local)
+- `deployed-addresses-sepolia.json` (cloud)
+
+#### Step 5 — Start the System
+```bash
+# Terminal 1 — Start Flask API
+cd flask_api && python app.py
+
+# Terminal 2 — Start React Dashboard
 cd dashboard && npm start
+
+# Terminal 3 — Ganache (if using local mode)
+# Already running from setup script
 ```
 
 ---

@@ -18,7 +18,11 @@ CACHE_FILE = os.path.join(
 )
 
 # ── AES-256 encryption key ────────────────────────────────────
-SECRET_KEY = hashlib.sha256(b"AidDistributionSecretKey2024").digest()
+CACHE_SECRET = os.getenv("CACHE_SECRET")
+if not CACHE_SECRET:
+    print("[ERROR] CACHE_SECRET not set in environment variables")
+    exit(1)
+SECRET_KEY = hashlib.sha256(CACHE_SECRET.encode()).digest()
 
 
 # ── FUNCTION: Encrypt data ────────────────────────────────────

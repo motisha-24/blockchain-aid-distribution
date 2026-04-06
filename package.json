@@ -1,0 +1,22 @@
+{
+  "name": "aidchain-blockchain",
+  "version": "1.0.0",
+  "description": "AidChain Blockchain Contracts and Deployment",
+  "scripts": {
+    "ganache": "ganache-cli --port 7545 --networkId 1337 --deterministic",
+    "deploy:local": "truffle migrate --network development --reset",
+    "deploy:sepolia": "truffle migrate --network sepolia --reset",
+    "test": "truffle test",
+    "compile": "truffle compile",
+    "console:local": "truffle console --network development",
+    "console:sepolia": "truffle console --network sepolia"
+  },
+  "dependencies": {
+    "@truffle/hdwallet-provider": "^2.1.13",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "ganache-cli": "^6.12.2",
+    "truffle": "^5.11.5"
+  }
+}
