@@ -14,11 +14,11 @@ import datetime
 import json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import jwt
+from env_loader import get_setting
 from blockchain import (
     register_beneficiary,
     distribute_aid,
@@ -65,14 +65,14 @@ CORS(app, origins=[
     "https://your-dashboard-domain.com"  # Replace with actual domain
 ])
 
-load_dotenv()
-
-JWT_SECRET = os.getenv("JWT_SECRET")
+JWT_SECRET = get_setting("JWT_SECRET", prefer="local")
 if not JWT_SECRET:
     print("[ERROR] JWT_SECRET not set in environment variables")
     exit(1)
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-JWT_EXP_DELTA_SECONDS = int(os.getenv("JWT_EXP_DELTA_SECONDS", "1800"))  # 30 minutes default
+JWT_ALGORITHM = get_setting("JWT_ALGORITHM", default="HS256", prefer="local")
+JWT_EXP_DELTA_SECONDS = int(
+    get_setting("JWT_EXP_DELTA_SECONDS", default="1800", prefer="local")
+)  # 30 minutes default
 
 limiter = Limiter(key_func=get_remote_address)
 limiter.init_app(app)

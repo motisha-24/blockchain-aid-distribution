@@ -11,6 +11,7 @@ from Crypto.Cipher   import AES
 from Crypto.Util.Padding import pad, unpad
 import hashlib
 from database import release_campaign_budget
+from env_loader import get_setting
 
 # ── Cache file location ───────────────────────────────────────
 CACHE_FILE = os.path.join(
@@ -18,7 +19,7 @@ CACHE_FILE = os.path.join(
 )
 
 # ── AES-256 encryption key ────────────────────────────────────
-CACHE_SECRET = os.getenv("CACHE_SECRET")
+CACHE_SECRET = get_setting("CACHE_SECRET", prefer="local")
 if not CACHE_SECRET:
     print("[ERROR] CACHE_SECRET not set in environment variables")
     exit(1)

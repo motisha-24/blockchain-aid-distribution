@@ -5,18 +5,13 @@
 # ================================================================
 
 import os
-from dotenv import load_dotenv
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ENV_PATH = os.path.join(BASE_DIR, ".env")
-load_dotenv(dotenv_path=ENV_PATH)
+from env_loader import get_setting
 
 # ── MODE SWITCH ──────────────────────────────────────────────────
 # Change to "CLOUD" when using Alchemy Sepolia
 # Change to "LOCAL" when using Ganache
 MODE = (
-    os.getenv("BLOCKCHAIN_MODE")
-    or os.getenv("MODE")
+    get_setting("BLOCKCHAIN_MODE", "MODE")
     or "CLOUD"
 ).strip().upper()
 if MODE not in {"LOCAL", "CLOUD"}:
@@ -24,27 +19,27 @@ if MODE not in {"LOCAL", "CLOUD"}:
     MODE = "CLOUD"
 
 # ── Local Ganache Settings ───────────────────────────────────────
-LOCAL_RPC              = os.getenv("LOCAL_RPC", "http://127.0.0.1:7545")
-LOCAL_REGISTRY_ADDRESS = os.getenv("LOCAL_REGISTRY_ADDRESS")
-LOCAL_AID_ADDRESS      = os.getenv("LOCAL_AID_ADDRESS")
+LOCAL_RPC              = get_setting("LOCAL_RPC", default="http://127.0.0.1:7545")
+LOCAL_REGISTRY_ADDRESS = get_setting("LOCAL_REGISTRY_ADDRESS")
+LOCAL_AID_ADDRESS      = get_setting("LOCAL_AID_ADDRESS")
 LOCAL_CHAIN_ID         = 1337
 
 # ── Cloud Alchemy Sepolia Settings ───────────────────────────────
 CLOUD_RPC = (
-    os.getenv("CLOUD_RPC")
-    or os.getenv("ALCHEMY_URL")
-    or os.getenv("INFURA_URL")
-    or os.getenv("RPC_URL")
+    get_setting("CLOUD_RPC")
+    or get_setting("ALCHEMY_URL")
+    or get_setting("INFURA_URL")
+    or get_setting("RPC_URL")
 )
-CLOUD_REGISTRY_ADDRESS = os.getenv("CLOUD_REGISTRY_ADDRESS")
-CLOUD_AID_ADDRESS      = os.getenv("CLOUD_AID_ADDRESS")
+CLOUD_REGISTRY_ADDRESS = get_setting("CLOUD_REGISTRY_ADDRESS")
+CLOUD_AID_ADDRESS      = get_setting("CLOUD_AID_ADDRESS")
 CLOUD_CHAIN_ID         = 11155111
 
 # ── Wallet ────────────────────────────────────────────────────────
 if MODE == "LOCAL":
-    PRIVATE_KEY = os.getenv("LOCAL_PRIVATE_KEY") or os.getenv("PRIVATE_KEY")
+    PRIVATE_KEY = get_setting("LOCAL_PRIVATE_KEY", "PRIVATE_KEY")
 else:
-    PRIVATE_KEY = os.getenv("PRIVATE_KEY") or os.getenv("LOCAL_PRIVATE_KEY")
+    PRIVATE_KEY = get_setting("PRIVATE_KEY", "LOCAL_PRIVATE_KEY")
 
 # ── Auto select based on MODE ────────────────────────────────────
 if MODE == "LOCAL":
