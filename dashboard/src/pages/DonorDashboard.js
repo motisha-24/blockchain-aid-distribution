@@ -20,6 +20,31 @@ export default function DonorDashboard() {
   const [stats,  setStats]  = useState({});
   const [smsLog, setSmsLog] = useState([]);
 
+  const normaliseLogEntry = (entry) => {
+    if (typeof entry === 'string') {
+      const match = entry.match(/(\d+)\s+(\w+)\s+of\s+(\w+)/);
+      return {
+        amount: match ? parseInt(match[1], 10) : 0,
+        aidType: match ? match[3] : 'UNKNOWN',
+        message: entry
+      };
+    }
+
+    if (entry && typeof entry === 'object') {
+      return {
+        amount: Number(entry.amount) || 0,
+        aidType: entry.aid_type || 'UNKNOWN',
+        message: entry.message || JSON.stringify(entry)
+      };
+    }
+
+    return {
+      amount: 0,
+      aidType: 'UNKNOWN',
+      message: String(entry ?? '')
+    };
+  };
+
   useEffect(() => {
     fetchData();
     const interval = setInterval(fetchData, 15000);
@@ -39,17 +64,17 @@ export default function DonorDashboard() {
   // Build aid type distribution from stats data
   const aidTypeData = Array.isArray(stats.aid_type_breakdown)
     ? stats.aid_type_breakdown.map(entry => {
-        // Handle both string and object formats
         if (typeof entry === 'string') {
           const match = entry.match(/(\d+)\s+(\w+)\s+of\s+(\w+)/);
           return match ? {
             name: match[3],
-            value: parseInt(match[1])
+            value: parseInt(match[1], 10)
           } : null;
-        } else if (typeof entry === 'object' && entry.name && entry.value) {
+        }
+        if (entry && typeof entry === 'object' && entry.name && entry.value) {
           return {
             name: entry.name,
-            value: parseInt(entry.value)
+            value: parseInt(entry.value, 10)
           };
         }
         return null;
@@ -59,17 +84,17 @@ export default function DonorDashboard() {
   // Build recent activity from stats data
   const recentActivity = Array.isArray(stats.recent_activity)
     ? stats.recent_activity.map((entry, i) => {
-        // Handle both string and object formats
         if (typeof entry === 'string') {
           const match = entry.match(/(\d+)\s+(\w+)\s+of\s+(\w+)/);
           return match ? {
             name: match[3],
-            amount: parseInt(match[1])
+            amount: parseInt(match[1], 10)
           } : null;
-        } else if (typeof entry === 'object' && entry.name && entry.amount) {
+        }
+        if (entry && typeof entry === 'object' && entry.name && entry.amount) {
           return {
             name: entry.name,
-            amount: parseInt(entry.amount)
+            amount: parseInt(entry.amount, 10)
           };
         }
         return null;
@@ -165,7 +190,7 @@ export default function DonorDashboard() {
                 color:'#7dd3a8', padding:'4px 0',
                 borderBottom:'1px solid #2a2a4a'
               }}>
-                {entry}
+                {normaliseLogEntry(entry).message}
               </div>
             ))
           ) : (

@@ -10,7 +10,7 @@ from web3 import Web3
 from config import RPC_URL, REGISTRY_ADDRESS, AID_ADDRESS, PRIVATE_KEY
 
 # ── Connect to blockchain node ────────────────────────────────
-w3 = Web3(Web3.HTTPProvider(RPC_URL))
+w3 = Web3(Web3.HTTPProvider(RPC_URL)) if RPC_URL else Web3()
 
 if w3.is_connected():
     print("[BLOCKCHAIN] Connected to node:", RPC_URL)
@@ -22,6 +22,10 @@ BASE_DIR  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_DIR = os.path.join(BASE_DIR, "build", "contracts")
 
 def load_contract(contract_name, address):
+    if not address:
+        print(f"[BLOCKCHAIN] WARNING: {contract_name} address not configured")
+        return None
+
     abi_path = os.path.join(BUILD_DIR, f"{contract_name}.json")
     with open(abi_path) as f:
         artifact = json.load(f)
@@ -35,12 +39,24 @@ registry_contract = load_contract("BeneficiaryRegistry", REGISTRY_ADDRESS)
 aid_contract      = load_contract("AidDistribution",     AID_ADDRESS)
 
 # ── Get deployer account ──────────────────────────────────────
-account = w3.eth.account.from_key(PRIVATE_KEY)
-print("[BLOCKCHAIN] Wallet address:", account.address)
+account = None
+if PRIVATE_KEY:
+    try:
+        account = w3.eth.account.from_key(PRIVATE_KEY)
+        print("[BLOCKCHAIN] Wallet address:", account.address)
+    except Exception as e:
+        print(f"[BLOCKCHAIN] ERROR: Invalid PRIVATE_KEY - {e}")
+else:
+    print("[BLOCKCHAIN] WARNING: Wallet not configured")
 
 
 # ── HELPER: Build and send a transaction ─────────────────────
 def send_transaction(contract_function):
+    if not w3.is_connected():
+        return {"success": False, "error": "Blockchain node is not reachable"}
+    if account is None:
+        return {"success": False, "error": "PRIVATE_KEY is missing or invalid"}
+
     try:
         nonce = w3.eth.get_transaction_count(account.address)
         tx    = contract_function.build_transaction({

@@ -16,9 +16,24 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
 
 # ── Hash password ─────────────────────────────────────────────
 def hash_password(password: str) -> str:
-    salt = bcrypt.gensalt()
-    hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
-    return hashed.decode('utf-8')
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def legacy_hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    if not stored_hash:
+        return False
+
+    if stored_hash.startswith("$2"):
+        try:
+            return bcrypt.checkpw(password.encode(), stored_hash.encode())
+        except ValueError:
+            return False
+
+    return stored_hash == legacy_hash_password(password)
 
 
 # ── Get database connection ───────────────────────────────────
@@ -116,7 +131,7 @@ def verify_login(username: str, password: str):
     user = get_user(username)
     if not user:
         return None
-    if not bcrypt.checkpw(password.encode('utf-8'), user["password"].encode('utf-8')):
+    if not verify_password(password, user["password"]):
         return None
     return user
 

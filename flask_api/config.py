@@ -7,12 +7,21 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ENV_PATH = os.path.join(BASE_DIR, ".env")
+load_dotenv(dotenv_path=ENV_PATH)
 
 # ── MODE SWITCH ──────────────────────────────────────────────────
 # Change to "CLOUD" when using Alchemy Sepolia
 # Change to "LOCAL" when using Ganache
-MODE = os.getenv("MODE", "LOCAL")
+MODE = (
+    os.getenv("BLOCKCHAIN_MODE")
+    or os.getenv("MODE")
+    or "CLOUD"
+).strip().upper()
+if MODE not in {"LOCAL", "CLOUD"}:
+    print(f"[CONFIG] WARNING: Invalid blockchain mode '{MODE}', defaulting to CLOUD")
+    MODE = "CLOUD"
 
 # ── Local Ganache Settings ───────────────────────────────────────
 LOCAL_RPC              = os.getenv("LOCAL_RPC", "http://127.0.0.1:7545")
@@ -21,16 +30,21 @@ LOCAL_AID_ADDRESS      = os.getenv("LOCAL_AID_ADDRESS")
 LOCAL_CHAIN_ID         = 1337
 
 # ── Cloud Alchemy Sepolia Settings ───────────────────────────────
-CLOUD_RPC              = os.getenv("INFURA_URL")
+CLOUD_RPC = (
+    os.getenv("CLOUD_RPC")
+    or os.getenv("ALCHEMY_URL")
+    or os.getenv("INFURA_URL")
+    or os.getenv("RPC_URL")
+)
 CLOUD_REGISTRY_ADDRESS = os.getenv("CLOUD_REGISTRY_ADDRESS")
 CLOUD_AID_ADDRESS      = os.getenv("CLOUD_AID_ADDRESS")
 CLOUD_CHAIN_ID         = 11155111
 
 # ── Wallet ────────────────────────────────────────────────────────
 if MODE == "LOCAL":
-    PRIVATE_KEY = os.getenv("LOCAL_PRIVATE_KEY")
+    PRIVATE_KEY = os.getenv("LOCAL_PRIVATE_KEY") or os.getenv("PRIVATE_KEY")
 else:
-    PRIVATE_KEY = os.getenv("PRIVATE_KEY")
+    PRIVATE_KEY = os.getenv("PRIVATE_KEY") or os.getenv("LOCAL_PRIVATE_KEY")
 
 # ── Auto select based on MODE ────────────────────────────────────
 if MODE == "LOCAL":
