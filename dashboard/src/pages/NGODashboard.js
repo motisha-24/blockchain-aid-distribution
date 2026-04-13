@@ -5,6 +5,7 @@
 // ================================================================
 
 import React, { useState, useEffect } from 'react';
+import DashboardHero from '../components/DashboardHero';
 import StatCard from '../components/StatCard';
 import {
   getStats, registerBeneficiary,
@@ -455,9 +456,19 @@ export default function NGODashboard() {
 
   return (
     <div className="page">
+      <DashboardHero
+        eyebrow="NGO Operations"
+        title="Coordinate beneficiary registration and field distribution"
+        subtitle="Handle registration, disbursement, verification, and cache synchronization through a more confident operational view designed for day-to-day field use."
+        badges={[
+          `${stats.total_beneficiaries || 0} registered beneficiaries`,
+          `${stats.total_transactions || 0} total distributions`,
+          stats.blockchain_online ? 'Blockchain available' : 'Blockchain unavailable'
+        ]}
+      />
 
       {/* ── Header ── */}
-      <div style={{
+      <div className="legacy-dashboard-header" style={{
         display: 'flex', justifyContent: 'space-between',
         alignItems: 'flex-start'
       }}>

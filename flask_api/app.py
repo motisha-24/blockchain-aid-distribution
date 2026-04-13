@@ -45,8 +45,10 @@ from database import (
     verify_login,
     update_last_login,
     get_all_users,
+    get_users_by_email,
     create_user,
     update_password,
+    recover_password,
     deactivate_user,
     reactivate_user,
     delete_user_db,
@@ -275,6 +277,48 @@ def login():
         "name"    : user["name"],
         "username": username
     }), 200
+
+
+@app.route("/api/auth/recover/username", methods=["POST"])
+@limiter.limit("5/minute")
+def recover_username():
+    data  = request.get_json() or {}
+    email = data.get("email", "").strip().lower()
+
+    if not email or "@" not in email:
+        return jsonify({"error": "A valid email address is required"}), 400
+
+    users = get_users_by_email(email)
+    if not users:
+        return jsonify({
+            "success": False,
+            "error": "No active account matched that email"
+        }), 404
+
+    return jsonify({
+        "success": True,
+        "accounts": users,
+        "message": "Matching usernames found"
+    }), 200
+
+
+@app.route("/api/auth/recover/password", methods=["POST"])
+@limiter.limit("5/minute")
+def recover_account_password():
+    data         = request.get_json() or {}
+    username     = data.get("username", "").strip()
+    email        = data.get("email", "").strip().lower()
+    new_password = data.get("new_password", "").strip()
+
+    if not username or len(username) < 3:
+        return jsonify({"error": "Username must be at least 3 characters"}), 400
+    if not email or "@" not in email:
+        return jsonify({"error": "A valid email address is required"}), 400
+    if len(new_password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
+
+    result = recover_password(username, email, new_password)
+    return jsonify(result), 200 if result["success"] else 404
 
 
 @app.route("/api/auth/logout", methods=["POST"])

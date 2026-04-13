@@ -126,6 +126,23 @@ def get_user(username: str):
     return None
 
 
+def get_users_by_email(email: str):
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT username, role, name, email
+        FROM users
+        WHERE LOWER(email) = LOWER(?) AND active = 1
+        ORDER BY username ASC
+        """,
+        (email.strip(),)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
 # ── Verify login credentials ──────────────────────────────────
 def verify_login(username: str, password: str):
     user = get_user(username)
@@ -208,6 +225,25 @@ def update_password(username, new_password):
     conn.commit()
     conn.close()
     return {"success": True, "message": "Password updated"}
+
+
+def recover_password(username, email, new_password):
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE users
+        SET password = ?
+        WHERE username = ? AND LOWER(email) = LOWER(?) AND active = 1
+        """,
+        (hash_password(new_password), username.strip(), email.strip())
+    )
+    conn.commit()
+    changed = cursor.rowcount
+    conn.close()
+    if changed == 0:
+        return {"success": False, "error": "No active account matched those details"}
+    return {"success": True, "message": "Password reset successful"}
 
 
 # ── Deactivate user account ───────────────────────────────────

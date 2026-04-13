@@ -5,6 +5,7 @@
 // ================================================================
 
 import React, { useState, useEffect } from 'react';
+import DashboardHero from '../components/DashboardHero';
 import StatCard from '../components/StatCard';
 import {
   getStats, advanceCycle,
@@ -304,9 +305,19 @@ export default function AdminDashboard() {
 
   return (
     <div className="page">
+      <DashboardHero
+        eyebrow="System Administration"
+        title={`Command centre for ${name || 'platform control'}`}
+        subtitle="Manage users, supervise campaign funding, review synchronization health, and oversee the full operational state of the aid platform from one place."
+        badges={[
+          `${users.length} user records`,
+          `${campaigns.length} campaigns tracked`,
+          stats.blockchain_online ? 'Blockchain available' : 'Blockchain unavailable'
+        ]}
+      />
 
       {/* ── Header ── */}
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+      <div className="legacy-dashboard-header" style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
         <div>
           <div className="page-title">Admin Dashboard</div>
           <div className="page-subtitle">

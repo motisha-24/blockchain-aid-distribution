@@ -6,8 +6,10 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Navbar            from './components/Navbar';
+import Footer            from './components/Footer';
 import ProtectedRoute    from './components/ProtectedRoute';
 import LoginPage         from './pages/LoginPage';
+import ForgotCredentialsPage from './pages/ForgotCredentialsPage';
 import AdminDashboard    from './pages/AdminDashboard';
 import NGODashboard      from './pages/NGODashboard';
 import DonorDashboard    from './pages/DonorDashboard';
@@ -16,10 +18,11 @@ import AuditorDashboard  from './pages/AuditorDashboard';
 // ── Layout wrapper — adds Navbar above every protected page ───
 function Layout({ children }) {
   return (
-    <>
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <Navbar/>
-      {children}
-    </>
+      <div style={{ flex: 1 }}>{children}</div>
+      <Footer/>
+    </div>
   );
 }
 
@@ -30,6 +33,7 @@ export default function App() {
 
         {/* ── Public routes ──────────────────────────────── */}
         <Route path="/login" element={<LoginPage/>}/>
+        <Route path="/recover" element={<ForgotCredentialsPage/>}/>
 
         {/* Default — redirect root to login */}
         <Route path="/" element={<Navigate to="/login" replace/>}/>

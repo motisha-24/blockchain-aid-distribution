@@ -46,6 +46,12 @@ export const getDistributionHistory = (limit = 50) =>
 export const loginUser   = (data) =>
   api.post('/api/auth/login', data);
 
+export const recoverUsername = (data) =>
+  api.post('/api/auth/recover/username', data);
+
+export const recoverPassword = (data) =>
+  api.post('/api/auth/recover/password', data);
+
 export const logoutUser  = () =>
   api.post('/api/auth/logout');
 

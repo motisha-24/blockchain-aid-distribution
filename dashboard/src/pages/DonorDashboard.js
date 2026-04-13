@@ -5,19 +5,22 @@
 // ================================================================
 
 import React, { useState, useEffect } from 'react';
-import { PieChart, Pie, Cell, Tooltip,
-         BarChart, Bar, XAxis, YAxis,
-         CartesianGrid, Legend, ResponsiveContainer } from 'recharts';
+import {
+  PieChart, Pie, Cell, Tooltip,
+  BarChart, Bar, XAxis, YAxis,
+  CartesianGrid, Legend, ResponsiveContainer
+} from 'recharts';
+import DashboardHero from '../components/DashboardHero';
 import StatCard from '../components/StatCard';
 import { getStats, getSMSLog } from '../services/api';
 
 const COLORS = [
-  '#1a2d5a','#38a169','#d69e2e',
-  '#e53e3e','#805ad5','#3182ce','#dd6b20'
+  '#1a2d5a', '#38a169', '#d69e2e',
+  '#e53e3e', '#805ad5', '#3182ce', '#dd6b20'
 ];
 
 export default function DonorDashboard() {
-  const [stats,  setStats]  = useState({});
+  const [stats, setStats] = useState({});
   const [smsLog, setSmsLog] = useState([]);
 
   const normaliseLogEntry = (entry) => {
@@ -46,30 +49,24 @@ export default function DonorDashboard() {
   };
 
   useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [s, sms] = await Promise.all([getStats(), getSMSLog()]);
+        setStats(s.data);
+        setSmsLog(sms.data.sms_log || []);
+      } catch {}
+    };
+
     fetchData();
     const interval = setInterval(fetchData, 15000);
     return () => clearInterval(interval);
   }, []);
 
-  const fetchData = async () => {
-    try {
-      const [s, sms] = await Promise.all([
-        getStats(), getSMSLog()
-      ]);
-      setStats(s.data);
-      setSmsLog(sms.data.sms_log || []);
-    } catch {}
-  };
-
-  // Build aid type distribution from stats data
   const aidTypeData = Array.isArray(stats.aid_type_breakdown)
     ? stats.aid_type_breakdown.map(entry => {
         if (typeof entry === 'string') {
           const match = entry.match(/(\d+)\s+(\w+)\s+of\s+(\w+)/);
-          return match ? {
-            name: match[3],
-            value: parseInt(match[1], 10)
-          } : null;
+          return match ? { name: match[3], value: parseInt(match[1], 10) } : null;
         }
         if (entry && typeof entry === 'object' && entry.name && entry.value) {
           return {
@@ -81,15 +78,11 @@ export default function DonorDashboard() {
       }).filter(Boolean)
     : [];
 
-  // Build recent activity from stats data
   const recentActivity = Array.isArray(stats.recent_activity)
-    ? stats.recent_activity.map((entry, i) => {
+    ? stats.recent_activity.map(entry => {
         if (typeof entry === 'string') {
           const match = entry.match(/(\d+)\s+(\w+)\s+of\s+(\w+)/);
-          return match ? {
-            name: match[3],
-            amount: parseInt(match[1], 10)
-          } : null;
+          return match ? { name: match[3], amount: parseInt(match[1], 10) } : null;
         }
         if (entry && typeof entry === 'object' && entry.name && entry.amount) {
           return {
@@ -103,115 +96,105 @@ export default function DonorDashboard() {
 
   return (
     <div className="page">
-      <div className="page-title">Donor Dashboard — Transparency</div>
-      <div className="page-subtitle">
-        Real-time view of all aid distributed on the blockchain
-      </div>
+      <DashboardHero
+        eyebrow="Donor Transparency"
+        title="Funding visibility with live distribution oversight"
+        subtitle="Review how aid is distributed, confirm beneficiary reach, and follow the reporting trail through a cleaner transparency-first dashboard."
+        badges={[
+          `${stats.total_transactions || 0} recorded distributions`,
+          `${stats.total_beneficiaries || 0} beneficiaries served`,
+          stats.blockchain_online ? 'Blockchain verified' : 'Blockchain unavailable'
+        ]}
+      />
 
-      {/* Stats */}
       <div className="stats-grid">
-        <StatCard label="Total Distributions"
-          value={stats.total_transactions}
-          color="#1a2d5a" icon="📦" sub="All aid types"/>
-        <StatCard label="Beneficiaries Served"
-          value={stats.total_beneficiaries}
-          color="#38a169" icon="👥" sub="Unique individuals"/>
-        <StatCard label="Current Cycle"
-          value={stats.current_cycle}
-          color="#d69e2e" icon="🔄" sub="Distribution round"/>
-        <StatCard label="SMS Notifications"
-          value={smsLog.length}
-          color="#805ad5" icon="💬" sub="Beneficiaries notified"/>
-        <StatCard label="Blockchain Status"
-          value={stats.blockchain_online ? 'Verified' : 'Offline'}
-          color={stats.blockchain_online ? '#38a169' : '#e53e3e'}
-          icon="✅" sub="Immutable record"/>
+        <StatCard label="Total Distributions" value={stats.total_transactions} color="#1a2d5a" icon="Records" sub="All aid types" />
+        <StatCard label="Beneficiaries Served" value={stats.total_beneficiaries} color="#38a169" icon="Reach" sub="Unique individuals" />
+        <StatCard label="Current Cycle" value={stats.current_cycle} color="#d69e2e" icon="Cycle" sub="Distribution round" />
+        <StatCard label="SMS Notifications" value={smsLog.length} color="#805ad5" icon="SMS" sub="Beneficiaries notified" />
+        <StatCard label="Blockchain Status" value={stats.blockchain_online ? 'Verified' : 'Offline'} color={stats.blockchain_online ? '#38a169' : '#e53e3e'} icon="Chain" sub="Immutable record" />
       </div>
 
-      {/* Charts */}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'20px' }}>
-
-        {/* Pie chart — aid type breakdown */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
         <div className="card">
-          <h3>📊 Aid Distribution by Type</h3>
+          <h3>Aid Distribution by Type</h3>
           {aidTypeData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={250}>
+            <ResponsiveContainer width="100%" height={260}>
               <PieChart>
-                <Pie data={aidTypeData} dataKey="value"
-                  nameKey="name" cx="50%" cy="50%" outerRadius={90} label>
+                <Pie data={aidTypeData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={94} label>
                   {aidTypeData.map((_, i) => (
-                    <Cell key={i} fill={COLORS[i % COLORS.length]}/>
+                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip/>
-                <Legend/>
+                <Tooltip />
+                <Legend />
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <div style={{ textAlign:'center', color:'#a0aec0', padding:'40px' }}>
+            <div style={{ textAlign: 'center', color: '#94a3b8', padding: '46px 20px' }}>
               No distribution data yet
             </div>
           )}
         </div>
 
-        {/* Bar chart — recent activity */}
         <div className="card">
-          <h3>📈 Recent Distribution Activity</h3>
+          <h3>Recent Distribution Activity</h3>
           {recentActivity.length > 0 ? (
-            <ResponsiveContainer width="100%" height={250}>
+            <ResponsiveContainer width="100%" height={260}>
               <BarChart data={recentActivity}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0"/>
-                <XAxis dataKey="name" tick={{ fontSize: 11 }}/>
-                <YAxis tick={{ fontSize: 11 }}/>
-                <Tooltip/>
-                <Legend/>
-                <Bar dataKey="amount" fill="#1a2d5a" radius={[4,4,0,0]}/>
+                <CartesianGrid strokeDasharray="3 3" stroke="#dbe5ef" />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="amount" fill="#1a2d5a" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div style={{ textAlign:'center', color:'#a0aec0', padding:'40px' }}>
+            <div style={{ textAlign: 'center', color: '#94a3b8', padding: '46px 20px' }}>
               No activity data yet
             </div>
           )}
         </div>
       </div>
 
-      {/* SMS notification log */}
       <div className="card">
-        <h3>💬 Beneficiary Notification Log (SMS)</h3>
+        <h3>Beneficiary Notification Log</h3>
         <div style={{
-          background:'#1a1a2e', borderRadius:'8px',
-          padding:'16px', maxHeight:'300px', overflowY:'auto'
+          background: 'linear-gradient(180deg, #13233f 0%, #0f172a 100%)',
+          borderRadius: '14px',
+          padding: '16px',
+          maxHeight: '300px',
+          overflowY: 'auto'
         }}>
           {smsLog.length > 0 ? (
             [...smsLog].reverse().map((entry, i) => (
-              <div key={i} style={{
-                fontFamily:'monospace', fontSize:'12px',
-                color:'#7dd3a8', padding:'4px 0',
-                borderBottom:'1px solid #2a2a4a'
-              }}>
+              <div
+                key={i}
+                style={{
+                  fontFamily: 'Consolas, monospace',
+                  fontSize: '12px',
+                  color: '#c7f9cc',
+                  padding: '8px 0',
+                  borderBottom: '1px solid rgba(148,163,184,0.16)'
+                }}
+              >
                 {normaliseLogEntry(entry).message}
               </div>
             ))
           ) : (
-            <div style={{ color:'#4a5568', textAlign:'center' }}>
+            <div style={{ color: '#94a3b8', textAlign: 'center', padding: '16px 0' }}>
               No SMS notifications sent yet
             </div>
           )}
         </div>
       </div>
 
-      {/* Transparency note */}
-      <div style={{
-        background:'#ebf8ff', border:'1px solid #bee3f8',
-        borderRadius:'8px', padding:'16px',
-        fontSize:'12px', color:'#2a69ac'
-      }}>
-        <strong>🔒 Blockchain Transparency Guarantee:</strong> Every
-        transaction shown on this dashboard is permanently recorded on the
-        Ethereum blockchain. Records cannot be altered, deleted, or tampered
-        with by any party — including the NGO. Each distribution is linked to
-        a unique transaction hash that can be independently verified.
+      <div className="card" style={{ background: 'linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%)' }}>
+        <h3>Transparency Commitment</h3>
+        <div style={{ fontSize: '13px', color: '#1e3a8a', lineHeight: 1.8 }}>
+          Every distribution displayed in this view is intended to be supported by an auditable blockchain record, helping donors monitor delivery performance and strengthen operational confidence.
+        </div>
       </div>
     </div>
   );

@@ -5,6 +5,7 @@
 // ================================================================
 
 import React, { useState, useEffect } from 'react';
+import DashboardHero from '../components/DashboardHero';
 import StatCard from '../components/StatCard';
 import {
   getStats, getTransaction,
@@ -269,9 +270,28 @@ export default function AuditorDashboard() {
 
   return (
     <div className="page">
+      <DashboardHero
+        eyebrow="Audit and Forensics"
+        title="Investigate transactions with export-ready evidence trails"
+        subtitle="Search beneficiary records, inspect transaction history, and export evidence-backed reports from a cleaner audit workspace built for accountability."
+        badges={[
+          `${stats.total_transactions || 0} transactions on record`,
+          `${stats.total_beneficiaries || 0} registered beneficiaries`,
+          stats.blockchain_online ? 'Blockchain available' : 'Blockchain unavailable'
+        ]}
+        actions={(
+          <button
+            className="btn btn-primary"
+            onClick={handleExportDistributions}
+            disabled={exportLoading}
+          >
+            {exportLoading ? 'Exporting...' : 'Export All Distributions'}
+          </button>
+        )}
+      />
 
       {/* ── Header ── */}
-      <div style={{
+      <div className="legacy-dashboard-header" style={{
         display: 'flex', justifyContent: 'space-between',
         alignItems: 'flex-start'
       }}>
