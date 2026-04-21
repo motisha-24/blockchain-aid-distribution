@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "mobile_app",
+    "slug": "mobile_app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.motisha.mobile_app"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "c24b34a1-279b-4268-8a87-a46c22bbc98f"
+      }
+    },
+    "owner": "motisha",
+    "plugins": [
+      "expo-secure-store",
+      "expo-sqlite"
+    ]
+  }
+}
