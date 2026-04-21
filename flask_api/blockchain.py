@@ -7,7 +7,7 @@
 import json
 import os
 from web3 import Web3
-from config import RPC_URL, REGISTRY_ADDRESS, AID_ADDRESS, PRIVATE_KEY
+from config import RPC_URL, REGISTRY_ADDRESS, AID_ADDRESS, PRIVATE_KEY, CHAIN_ID
 
 # ── Connect to blockchain node ────────────────────────────────
 w3 = Web3(Web3.HTTPProvider(RPC_URL)) if RPC_URL else Web3()
@@ -63,6 +63,8 @@ def send_transaction(contract_function):
             "gas"     : 400000,
             "gasPrice": w3.to_wei("20", "gwei"),
             "nonce"   : nonce,
+            "from"    : account.address,
+            "chainId" : int(CHAIN_ID),
         })
         signed  = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
@@ -74,7 +76,15 @@ def send_transaction(contract_function):
             "status"  : receipt.status   # 1 = success, 0 = failed
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        # Include detailed debug context
+        bal = "N/A"
+        try:
+            bal = w3.eth.get_balance(account.address)
+        except:
+            pass
+        err_msg = str(e)
+        debug_info = f" | Debug: Addr={account.address}, Bal={bal}, Chain={CHAIN_ID}, RPC={RPC_URL}, Mode={os.environ.get('BLOCKCHAIN_MODE', 'NOT_SET')}"
+        return {"success": False, "error": err_msg + debug_info}
 
 
 # ================================================================

@@ -36,10 +36,12 @@ CLOUD_AID_ADDRESS      = get_setting("CLOUD_AID_ADDRESS")
 CLOUD_CHAIN_ID         = 11155111
 
 # ── Wallet ────────────────────────────────────────────────────────
+from env_loader import ROOT_ENV, LOCAL_ENV
+
 if MODE == "LOCAL":
-    PRIVATE_KEY = get_setting("LOCAL_PRIVATE_KEY", "PRIVATE_KEY")
+    PRIVATE_KEY = LOCAL_ENV.get("LOCAL_PRIVATE_KEY") or ROOT_ENV.get("LOCAL_PRIVATE_KEY") or get_setting("LOCAL_PRIVATE_KEY", "PRIVATE_KEY")
 else:
-    PRIVATE_KEY = get_setting("PRIVATE_KEY", "LOCAL_PRIVATE_KEY")
+    PRIVATE_KEY = ROOT_ENV.get("PRIVATE_KEY") or LOCAL_ENV.get("PRIVATE_KEY") or get_setting("PRIVATE_KEY", "LOCAL_PRIVATE_KEY")
 
 # ── Auto select based on MODE ────────────────────────────────────
 if MODE == "LOCAL":

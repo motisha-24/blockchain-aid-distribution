@@ -42,9 +42,10 @@ export default function NGODashboard() {
 
   // ── Distribution form ──────────────────────────────────────
   const [distForm, setDistForm] = useState({
-    beneficiary_id: '', amount: '',
-    aid_type: 'MAIZE', aid_unit: 'KG', location: '',
-    campaign_id: ''
+    beneficiary_id: '', location: '',
+    items: [
+      { aid_type: 'MAIZE', aid_unit: 'KG', amount: '', campaign_id: '' }
+    ]
   });
   const [distErrors, setDistErrors] = useState({});
 
@@ -68,12 +69,12 @@ export default function NGODashboard() {
   useEffect(() => {
     const fetchInitial = async () => {
       try {
-        const [s, p, c] = await Promise.all([
+        const [s, p, c] = await Promise.allSettled([
           getStats(), getPending(), getCampaigns()
         ]);
-        setStats(s.data);
-        setPending(p.data.pending || []);
-        setCampaigns(c.data.campaigns || []);
+        if (s.status === 'fulfilled') setStats(s.value.data);
+        if (p.status === 'fulfilled') setPending(p.value.data.pending || []);
+        if (c.status === 'fulfilled') setCampaigns(c.value.data.campaigns || []);
       } catch {}
     };
     fetchInitial();
@@ -83,12 +84,12 @@ export default function NGODashboard() {
 
   const refreshData = async () => {
     try {
-      const [s, p, c] = await Promise.all([
+      const [s, p, c] = await Promise.allSettled([
         getStats(), getPending(), getCampaigns()
       ]);
-      setStats(s.data);
-      setPending(p.data.pending || []);
-      setCampaigns(c.data.campaigns || []);
+      if (s.status === 'fulfilled') setStats(s.value.data);
+      if (p.status === 'fulfilled') setPending(p.value.data.pending || []);
+      if (c.status === 'fulfilled') setCampaigns(c.value.data.campaigns || []);
     } catch {}
   };
 
@@ -98,14 +99,34 @@ export default function NGODashboard() {
   };
 
   // ── Aid type change ────────────────────────────────────────
-  const handleAidTypeChange = (e) => {
-    const selected = AID_TYPES.find(a => a.type === e.target.value);
-    setDistForm({ ...distForm,
-      aid_type: selected.type,
-      aid_unit: selected.unit,
-      campaign_id: ''
+  const handleAidTypeChange = (index, value) => {
+    const selected = AID_TYPES.find(a => a.type === value);
+    const newItems = [...distForm.items];
+    newItems[index] = { ...newItems[index], aid_type: selected.type, aid_unit: selected.unit, campaign_id: '' };
+    setDistForm({ ...distForm, items: newItems });
+    
+    if (distErrors.items && distErrors.items[index]) {
+      const newItemsErrors = [...distErrors.items];
+      newItemsErrors[index] = { ...newItemsErrors[index], aid_type: '', campaign_id: '' };
+      setDistErrors({ ...distErrors, items: newItemsErrors });
+    }
+  };
+
+  const handleAddItem = () => {
+    setDistForm({
+      ...distForm,
+      items: [...distForm.items, { aid_type: 'MAIZE', aid_unit: 'KG', amount: '', campaign_id: '' }]
     });
-    setDistErrors({ ...distErrors, aid_type: '', campaign_id: '' });
+  };
+
+  const handleRemoveItem = (index) => {
+    const newItems = distForm.items.filter((_, i) => i !== index);
+    setDistForm({ ...distForm, items: newItems });
+    
+    if (distErrors.items) {
+      const newItemsErrors = distErrors.items.filter((_, i) => i !== index);
+      setDistErrors({ ...distErrors, items: newItemsErrors });
+    }
   };
 
   // ================================================================
@@ -168,15 +189,6 @@ export default function NGODashboard() {
       errors.beneficiary_id = "Must be a positive number";
     }
 
-    if (!distForm.amount) {
-      errors.amount = "Amount is required";
-    } else if (parseInt(distForm.amount) <= 0 ||
-               isNaN(parseInt(distForm.amount))) {
-      errors.amount = "Amount must be greater than zero";
-    } else if (parseInt(distForm.amount) > 10000) {
-      errors.amount = "Amount cannot exceed 10,000";
-    }
-
     if (!distForm.location.trim()) {
       errors.location = "Distribution location is required";
     } else if (distForm.location.trim().length < 3) {
@@ -185,18 +197,45 @@ export default function NGODashboard() {
       errors.location = "Location cannot exceed 100 characters";
     }
 
-    if (distForm.campaign_id) {
-      const campaign = campaigns.find(c => String(c.id) === String(distForm.campaign_id));
-      if (!campaign) {
-        errors.campaign_id = "Selected campaign is invalid";
-      } else if (!campaign.active) {
-        errors.campaign_id = "Selected campaign is not active";
-      } else if (campaign.aid_type !== distForm.aid_type) {
-        errors.campaign_id = "Selected campaign does not match aid type";
-      } else if (parseInt(distForm.amount) > campaign.remaining) {
-        errors.campaign_id = "Selected campaign does not have enough remaining budget";
+    errors.items = [];
+    let hasItemErrors = false;
+    const seenTypes = new Set();
+
+    distForm.items.forEach((item, index) => {
+      const itemErrs = {};
+      
+      if (!item.amount) {
+        itemErrs.amount = "Amount is required";
+      } else if (parseInt(item.amount) <= 0 ||
+                 isNaN(parseInt(item.amount))) {
+        itemErrs.amount = "Must be > 0";
+      } else if (parseInt(item.amount) > 10000) {
+        itemErrs.amount = "Cannot exceed 10,000";
       }
-    }
+
+      if (seenTypes.has(item.aid_type)) {
+        itemErrs.aid_type = "Duplicate aid type";
+      }
+      seenTypes.add(item.aid_type);
+
+      if (item.campaign_id) {
+        const campaign = campaigns.find(c => String(c.id) === String(item.campaign_id));
+        if (!campaign) {
+          itemErrs.campaign_id = "Invalid campaign";
+        } else if (!campaign.active) {
+          itemErrs.campaign_id = "Campaign not active";
+        } else if (campaign.aid_type !== item.aid_type) {
+          itemErrs.campaign_id = "Mismatch aid type";
+        } else if (parseInt(item.amount) > campaign.remaining) {
+          itemErrs.campaign_id = "Exceeds remaining budget";
+        }
+      }
+
+      if (Object.keys(itemErrs).length > 0) hasItemErrors = true;
+      errors.items[index] = itemErrs;
+    });
+
+    if (!hasItemErrors) delete errors.items;
 
     return errors;
   };
@@ -252,33 +291,33 @@ export default function NGODashboard() {
   const handleDistribute = async () => {
     const errors = validateDistForm();
     setDistErrors(errors);
-    if (Object.keys(errors).length > 0) {
+    if (Object.keys(errors).length > 0 && (errors.beneficiary_id || errors.location || errors.items)) {
       showAlert('Please fix the errors in the distribution form', 'error');
       return;
     }
     setLoading(true);
     try {
-      const payload = {
-        beneficiary_id: parseInt(distForm.beneficiary_id),
-        amount:         parseInt(distForm.amount),
-        aid_type:       distForm.aid_type,
-        aid_unit:       distForm.aid_unit,
-        location:       distForm.location.trim()
-      };
-      if (distForm.campaign_id) {
-        payload.campaign_id = parseInt(distForm.campaign_id);
+      let hashes = [];
+      for (const item of distForm.items) {
+        const payload = {
+          beneficiary_id: parseInt(distForm.beneficiary_id),
+          amount:         parseInt(item.amount),
+          aid_type:       item.aid_type,
+          aid_unit:       item.aid_unit,
+          location:       distForm.location.trim()
+        };
+        if (item.campaign_id) {
+          payload.campaign_id = parseInt(item.campaign_id);
+        }
+        const res = await distributeAid(payload);
+        if (res.data.tx_hash) hashes.push(res.data.tx_hash.slice(0, 6));
       }
-      const res = await distributeAid(payload);
-      showAlert(
-        `✓ ${distForm.amount} ${distForm.aid_unit} of ` +
-        `${distForm.aid_type} distributed` +
-        `${distForm.campaign_id ? ` via campaign #${distForm.campaign_id}` : ''}. ` +
-        `TX: ${res.data.tx_hash?.slice(0, 14)}...`
-      );
+      showAlert(`✓ Successfully distributed ${distForm.items.length} aid items. TXs: ${hashes.join(', ')}`);
       setDistForm({
-        beneficiary_id: '', amount: '',
-        aid_type: 'MAIZE', aid_unit: 'KG', location: '',
-        campaign_id: ''
+        beneficiary_id: '', location: '',
+        items: [
+          { aid_type: 'MAIZE', aid_unit: 'KG', amount: '', campaign_id: '' }
+        ]
       });
       setDistErrors({});
       refreshData();
@@ -394,8 +433,8 @@ export default function NGODashboard() {
     return matchSearch && matchFilter;
   });
 
-  const availableCampaigns = campaigns.filter(c =>
-    c.active && c.aid_type === distForm.aid_type && c.remaining > 0
+  const getAvailableCampaigns = (aidType) => campaigns.filter(c =>
+    c.active && c.aid_type === aidType && c.remaining > 0
   );
 
   // ================================================================
@@ -644,9 +683,14 @@ export default function NGODashboard() {
 
       {/* ── DISTRIBUTION FORM ── */}
       <div className="card">
-        <h3>📦 Distribute Aid</h3>
-        <div className="form-grid">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <h3 style={{ margin: 0 }}>📦 Distribute Aid</h3>
+          <button className="btn btn-blue btn-sm" onClick={handleAddItem} disabled={distForm.items.length >= AID_TYPES.length}>
+            + Add Another Aid Type
+          </button>
+        </div>
 
+        <div className="form-grid" style={{ marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #e2e8f0' }}>
           <div className="form-group">
             <label>Beneficiary ID *</label>
             <input type="number"
@@ -661,54 +705,7 @@ export default function NGODashboard() {
             {distErrors.beneficiary_id &&
               <div style={errStyle}>⚠ {distErrors.beneficiary_id}</div>}
           </div>
-
-          <div className="form-group">
-            <label>Aid Type *</label>
-            <select value={distForm.aid_type}
-              onChange={handleAidTypeChange}
-              style={inputStyle(false)}>
-              {AID_TYPES.map(a => (
-                <option key={a.type} value={a.type}>
-                  {a.type} ({a.unit})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label>Campaign (optional)</label>
-            <select value={distForm.campaign_id}
-              onChange={e => setDistForm({ ...distForm, campaign_id: e.target.value })}
-              style={inputStyle(distErrors.campaign_id)}>
-              <option value="">No campaign</option>
-              {availableCampaigns.map(c => (
-                <option key={c.id} value={c.id}>
-                  #{c.id} {c.name} — remaining {c.remaining}
-                </option>
-              ))}
-            </select>
-            {distErrors.campaign_id &&
-              <div style={errStyle}>⚠ {distErrors.campaign_id}</div>}
-            {availableCampaigns.length === 0 && (
-              <div style={{ fontSize: '11px', color: '#718096', marginTop: '6px' }}>
-                No active campaigns matching the selected aid type.
-              </div>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label>Amount ({distForm.aid_unit}) *</label>
-            <input type="number" placeholder="e.g. 50"
-              value={distForm.amount}
-              style={inputStyle(distErrors.amount)}
-              onChange={e => {
-                setDistForm({ ...distForm, amount: e.target.value });
-                setDistErrors({ ...distErrors, amount: '' });
-              }}/>
-            {distErrors.amount &&
-              <div style={errStyle}>⚠ {distErrors.amount}</div>}
-          </div>
-
+          
           <div className="form-group">
             <label>Distribution Location *</label>
             <input placeholder="e.g. Gweru Ward 5"
@@ -721,18 +718,112 @@ export default function NGODashboard() {
             {distErrors.location &&
               <div style={errStyle}>⚠ {distErrors.location}</div>}
           </div>
-
         </div>
+
+        {distForm.items.map((item, index) => {
+          const itemErrs = distErrors.items ? distErrors.items[index] || {} : {};
+          const availableCamps = getAvailableCampaigns(item.aid_type);
+          
+          return (
+            <div key={index} style={{ 
+              position: 'relative', 
+              background: '#f7fafc', 
+              padding: '16px', 
+              borderRadius: '8px', 
+              marginBottom: '12px',
+              border: '1px solid #e2e8f0'
+            }}>
+              {distForm.items.length > 1 && (
+                <button 
+                  onClick={() => handleRemoveItem(index)}
+                  style={{
+                    position: 'absolute', top: '8px', right: '8px',
+                    background: 'none', border: 'none', color: '#e53e3e',
+                    cursor: 'pointer', fontSize: '18px', fontWeight: 'bold'
+                  }}
+                  title="Remove Item"
+                >×</button>
+              )}
+              
+              <div className="form-grid" style={{ marginTop: '8px' }}>
+                <div className="form-group">
+                  <label>Aid Type *</label>
+                  <select value={item.aid_type}
+                    onChange={(e) => handleAidTypeChange(index, e.target.value)}
+                    style={inputStyle(itemErrs.aid_type)}>
+                    {AID_TYPES.map(a => (
+                      <option key={a.type} value={a.type}>
+                        {a.type} ({a.unit})
+                      </option>
+                    ))}
+                  </select>
+                  {itemErrs.aid_type &&
+                    <div style={errStyle}>⚠ {itemErrs.aid_type}</div>}
+                </div>
+
+                <div className="form-group">
+                  <label>Amount ({item.aid_unit}) *</label>
+                  <input type="number" placeholder="e.g. 50"
+                    value={item.amount}
+                    style={inputStyle(itemErrs.amount)}
+                    onChange={e => {
+                      const newItems = [...distForm.items];
+                      newItems[index].amount = e.target.value;
+                      setDistForm({ ...distForm, items: newItems });
+                      if (distErrors.items && distErrors.items[index]) {
+                        const newErrs = [...distErrors.items];
+                        newErrs[index].amount = '';
+                        setDistErrors({ ...distErrors, items: newErrs });
+                      }
+                    }}/>
+                  {itemErrs.amount &&
+                    <div style={errStyle}>⚠ {itemErrs.amount}</div>}
+                </div>
+
+                <div className="form-group">
+                  <label>Campaign (optional)</label>
+                  <select value={item.campaign_id}
+                    onChange={e => {
+                      const newItems = [...distForm.items];
+                      newItems[index].campaign_id = e.target.value;
+                      setDistForm({ ...distForm, items: newItems });
+                      if (distErrors.items && distErrors.items[index]) {
+                        const newErrs = [...distErrors.items];
+                        newErrs[index].campaign_id = '';
+                        setDistErrors({ ...distErrors, items: newErrs });
+                      }
+                    }}
+                    style={inputStyle(itemErrs.campaign_id)}>
+                    <option value="">No campaign</option>
+                    {availableCamps.map(c => (
+                      <option key={c.id} value={c.id}>
+                        #{c.id} {c.name} — remaining {c.remaining}
+                      </option>
+                    ))}
+                  </select>
+                  {itemErrs.campaign_id &&
+                    <div style={errStyle}>⚠ {itemErrs.campaign_id}</div>}
+                  {availableCamps.length === 0 && (
+                    <div style={{ fontSize: '11px', color: '#718096', marginTop: '6px' }}>
+                      No active campaigns matching {item.aid_type}.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
         <div style={{
           display: 'flex', alignItems: 'center',
-          gap: '12px', marginTop: '4px'
+          gap: '12px', marginTop: '16px'
         }}>
           <button className="btn btn-green"
             onClick={handleDistribute} disabled={loading}>
-            {loading ? 'Processing...' : '✓ Distribute Aid'}
+            {loading ? 'Processing...' : '✓ Submit Distribution'}
           </button>
           <span style={{ fontSize: '11px', color: '#a0aec0' }}>
-            * All fields are required
+            * Beneficiary ID, Location and Amount are required
           </span>
         </div>
       </div>

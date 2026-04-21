@@ -391,7 +391,9 @@ def create_new_user():
 def campaigns_list():
     token = get_token_from_request()
     user  = verify_token(token)
-    if not user or user["role"] not in ["ADMIN", "NGO"]:
+    if not user:
+        return jsonify({"error": "Unauthorised"}), 401
+    if user["role"] not in ["ADMIN", "NGO"]:
         return jsonify({"error": "Unauthorised — Admin or NGO only"}), 403
     return jsonify(list_campaigns()), 200
 
@@ -400,7 +402,9 @@ def campaigns_list():
 def campaign_details(campaign_id):
     token = get_token_from_request()
     user  = verify_token(token)
-    if not user or user["role"] not in ["ADMIN", "NGO"]:
+    if not user:
+        return jsonify({"error": "Unauthorised"}), 401
+    if user["role"] not in ["ADMIN", "NGO"]:
         return jsonify({"error": "Unauthorised — Admin or NGO only"}), 403
     return jsonify(get_campaign(campaign_id)), 200
 
