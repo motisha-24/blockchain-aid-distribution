@@ -26,6 +26,7 @@ contract BeneficiaryRegistry {
 
     // ── Storage ──────────────────────────────────────────────
     mapping(uint256 => Beneficiary) public beneficiaries;
+    uint256[] public allIds; // Track all IDs explicitly to avoid indexing bugs
     uint256 public totalBeneficiaries;
 
     // ── Events ───────────────────────────────────────────────
@@ -87,6 +88,7 @@ contract BeneficiaryRegistry {
             active:      true
         });
 
+        allIds.push(_id); // Store ID for enumeration
         totalBeneficiaries++;
 
         emit BeneficiaryRegistered(
@@ -172,22 +174,12 @@ contract BeneficiaryRegistry {
     {
         return totalBeneficiaries;
     }
+
     // ── Get all registered beneficiary IDs ───────────────────
-// Returns array of all IDs ever registered
-// Frontend uses these to fetch full details one by one
-function getAllIds()
-    public view returns (uint256[] memory)
-{
-    uint256[] memory ids = new uint256[](totalBeneficiaries);
-    uint256 count = 0;
-    // Note: this works because IDs are sequential from 1
-    // In production use a more robust enumeration pattern
-    for (uint256 i = 1; i <= totalBeneficiaries + 50; i++) {
-        if (beneficiaries[i].registered && count < totalBeneficiaries) {
-            ids[count] = i;
-            count++;
-        }
+    // Fixed: Now returns the allIds array which is updated on registration
+    function getAllIds()
+        public view returns (uint256[] memory)
+    {
+        return allIds;
     }
-    return ids;
-}
 }

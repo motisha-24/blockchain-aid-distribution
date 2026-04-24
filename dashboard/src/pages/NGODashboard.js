@@ -8,12 +8,14 @@ import React, { useState, useEffect } from 'react';
 import DashboardHero from '../components/DashboardHero';
 import StatCard from '../components/StatCard';
 import {
-  getStats, registerBeneficiary,
+  getStats,
   distributeAid, advanceCycle,
   getPending, syncCache,
   getBeneficiary, deactivateBeneficiary,
   reactivateBeneficiary, getAllBeneficiaries,
-  getDistributionHistory, getCampaigns
+  getDistributionHistory, getCampaigns,
+  getHardwareProfile, updateHardwareProfile,
+  queueHardwareEnrollment, getEnrollmentRequests
 } from '../services/api';
 
 const AID_TYPES = [
@@ -32,6 +34,16 @@ export default function NGODashboard() {
   const [alert,      setAlert]      = useState(null);
   const [loading,    setLoading]    = useState(false);
   const [campaigns,  setCampaigns]  = useState([]);
+  const [enrollmentRequests, setEnrollmentRequests] = useState([]);
+  const [hardwareProfile, setHardwareProfile] = useState({
+    aid_type: 'MAIZE',
+    aid_unit: 'KG',
+    amount: 50,
+    location: 'Gweru Ward 5',
+    officer_id: 'ngo_officer',
+    device_id: 'aidchain-field-01'
+  });
+  const [hardwareErrors, setHardwareErrors] = useState({});
 
   // ── Registration form ──────────────────────────────────────
   const [regForm, setRegForm] = useState({
@@ -69,12 +81,18 @@ export default function NGODashboard() {
   useEffect(() => {
     const fetchInitial = async () => {
       try {
-        const [s, p, c] = await Promise.allSettled([
-          getStats(), getPending(), getCampaigns()
+        const [s, p, c, h, e] = await Promise.allSettled([
+          getStats(), getPending(), getCampaigns(), getHardwareProfile(), getEnrollmentRequests()
         ]);
         if (s.status === 'fulfilled') setStats(s.value.data);
         if (p.status === 'fulfilled') setPending(p.value.data.pending || []);
         if (c.status === 'fulfilled') setCampaigns(c.value.data.campaigns || []);
+        if (h.status === 'fulfilled' && h.value.data.profile) {
+          setHardwareProfile(h.value.data.profile);
+        }
+        if (e.status === 'fulfilled') {
+          setEnrollmentRequests(e.value.data.requests || []);
+        }
       } catch {}
     };
     fetchInitial();
@@ -84,12 +102,18 @@ export default function NGODashboard() {
 
   const refreshData = async () => {
     try {
-      const [s, p, c] = await Promise.allSettled([
-        getStats(), getPending(), getCampaigns()
+      const [s, p, c, h, e] = await Promise.allSettled([
+        getStats(), getPending(), getCampaigns(), getHardwareProfile(), getEnrollmentRequests()
       ]);
       if (s.status === 'fulfilled') setStats(s.value.data);
       if (p.status === 'fulfilled') setPending(p.value.data.pending || []);
       if (c.status === 'fulfilled') setCampaigns(c.value.data.campaigns || []);
+      if (h.status === 'fulfilled' && h.value.data.profile) {
+        setHardwareProfile(h.value.data.profile);
+      }
+      if (e.status === 'fulfilled') {
+        setEnrollmentRequests(e.value.data.requests || []);
+      }
     } catch {}
   };
 
@@ -240,10 +264,64 @@ export default function NGODashboard() {
     return errors;
   };
 
+  const validateHardwareProfile = () => {
+    const errors = {};
+
+    if (!hardwareProfile.aid_type?.trim()) {
+      errors.aid_type = "Aid type is required";
+    }
+    if (!hardwareProfile.aid_unit?.trim()) {
+      errors.aid_unit = "Aid unit is required";
+    }
+    if (!hardwareProfile.amount || Number(hardwareProfile.amount) <= 0) {
+      errors.amount = "Amount must be a positive number";
+    }
+    if (!hardwareProfile.location?.trim() || hardwareProfile.location.trim().length < 3) {
+      errors.location = "Location must be at least 3 characters";
+    }
+    if (!hardwareProfile.officer_id?.trim() || hardwareProfile.officer_id.trim().length < 3) {
+      errors.officer_id = "Officer ID is required";
+    }
+    if (!hardwareProfile.device_id?.trim() || hardwareProfile.device_id.trim().length < 3) {
+      errors.device_id = "Device ID is required";
+    }
+
+    return errors;
+  };
+
+  const handleSaveHardwareProfile = async () => {
+    const errors = validateHardwareProfile();
+    setHardwareErrors(errors);
+    if (Object.keys(errors).length > 0) {
+      showAlert('Please fix the hardware profile errors', 'error');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await updateHardwareProfile({
+        aid_type: hardwareProfile.aid_type.trim().toUpperCase(),
+        aid_unit: hardwareProfile.aid_unit.trim().toUpperCase(),
+        amount: Number(hardwareProfile.amount),
+        location: hardwareProfile.location.trim(),
+        officer_id: hardwareProfile.officer_id.trim(),
+        device_id: hardwareProfile.device_id.trim()
+      });
+      if (res.data.profile) {
+        setHardwareProfile(res.data.profile);
+      }
+      setHardwareErrors({});
+      showAlert('✓ Hardware profile saved. ESP32 can now fetch the latest field settings.');
+    } catch (e) {
+      showAlert(e.response?.data?.message || e.response?.data?.error || 'Failed to save hardware profile', 'error');
+    }
+    setLoading(false);
+  };
+
   // ================================================================
   //  REGISTER BENEFICIARY
   // ================================================================
-  const handleRegister = async () => {
+const handleRegister = async () => {
   const errors = validateRegForm();
   setRegErrors(errors);
   if (Object.keys(errors).length > 0) {
@@ -251,37 +329,43 @@ export default function NGODashboard() {
     return;
   }
 
-  // ── Check if ID already exists before submitting ───────────
   try {
-    const check = await getBeneficiary(parseInt(regForm.id));
+    const check = await getBeneficiary(parseInt(regForm.id, 10));
     if (check.data.success) {
       showAlert(
-        `⚠ Beneficiary ID ${regForm.id} is already registered — ` +
-        `Name: ${check.data.name} | ` +
-        `Location: ${check.data.location}`,
+        `Beneficiary ID ${regForm.id} is already registered on blockchain`,
         'error'
       );
       return;
     }
   } catch {
-    // ID does not exist on blockchain — safe to proceed
+    // Safe to continue when the beneficiary does not yet exist on-chain.
   }
 
   setLoading(true);
   try {
-    await registerBeneficiary({
-      id:          parseInt(regForm.id),
-      name:        regForm.name.trim(),
+    await queueHardwareEnrollment({
+      id: parseInt(regForm.id, 10),
+      name: regForm.name.trim(),
       national_id: regForm.national_id.trim(),
-      phone:       regForm.phone.trim(),
-      location:    regForm.location.trim()
+      phone: regForm.phone.trim(),
+      location: regForm.location.trim(),
+      officer_id: hardwareProfile.officer_id,
+      device_id: hardwareProfile.device_id
     });
-    showAlert(`✓ ${regForm.name} registered successfully`);
+    showAlert(
+      `Queued ${regForm.name} for fingerprint enrollment on ${hardwareProfile.device_id}`
+    );
     setRegForm({ id:'', name:'', national_id:'', phone:'', location:'' });
     setRegErrors({});
     refreshData();
   } catch (e) {
-    showAlert(e.response?.data?.error || 'Registration failed', 'error');
+    showAlert(
+      e.response?.data?.message ||
+      e.response?.data?.error ||
+      'Enrollment queueing failed',
+      'error'
+    );
   }
   setLoading(false);
 };
@@ -555,6 +639,191 @@ export default function NGODashboard() {
           icon="⛓️" sub="Ganache node"/>
       </div>
 
+      <div className="card">
+        <div style={{
+          display: 'flex', justifyContent: 'space-between',
+          alignItems: 'center', marginBottom: '16px', gap: '12px',
+          flexWrap: 'wrap'
+        }}>
+          <div>
+            <h3 style={{ margin: 0, padding: 0, borderBottom: 'none' }}>
+              Hardware Device Profile
+            </h3>
+            <div style={{ fontSize: '12px', color: '#718096', marginTop: '6px' }}>
+              These values are fetched by the ESP32 so the field team does not need
+              to reflash firmware when the distribution setup changes.
+            </div>
+          </div>
+          <button className="btn btn-primary btn-sm"
+            onClick={handleSaveHardwareProfile}
+            disabled={loading}>
+            {loading ? 'Saving...' : 'Save Device Profile'}
+          </button>
+        </div>
+
+        <div className="form-grid">
+          <div className="form-group">
+            <label>Aid Type *</label>
+            <select
+              value={hardwareProfile.aid_type}
+              style={inputStyle(hardwareErrors.aid_type)}
+              onChange={e => {
+                const selected = AID_TYPES.find(a => a.type === e.target.value);
+                setHardwareProfile({
+                  ...hardwareProfile,
+                  aid_type: e.target.value,
+                  aid_unit: selected?.unit || hardwareProfile.aid_unit
+                });
+                setHardwareErrors({ ...hardwareErrors, aid_type: '', aid_unit: '' });
+              }}>
+              {AID_TYPES.map(item => (
+                <option key={item.type} value={item.type}>{item.type}</option>
+              ))}
+            </select>
+            {hardwareErrors.aid_type && <div style={errStyle}>⚠ {hardwareErrors.aid_type}</div>}
+          </div>
+
+          <div className="form-group">
+            <label>Aid Unit *</label>
+            <input
+              value={hardwareProfile.aid_unit}
+              style={inputStyle(hardwareErrors.aid_unit)}
+              onChange={e => {
+                setHardwareProfile({ ...hardwareProfile, aid_unit: e.target.value.toUpperCase() });
+                setHardwareErrors({ ...hardwareErrors, aid_unit: '' });
+              }}/>
+            {hardwareErrors.aid_unit && <div style={errStyle}>⚠ {hardwareErrors.aid_unit}</div>}
+          </div>
+
+          <div className="form-group">
+            <label>Amount *</label>
+            <input
+              type="number"
+              value={hardwareProfile.amount}
+              style={inputStyle(hardwareErrors.amount)}
+              onChange={e => {
+                setHardwareProfile({ ...hardwareProfile, amount: e.target.value });
+                setHardwareErrors({ ...hardwareErrors, amount: '' });
+              }}/>
+            {hardwareErrors.amount && <div style={errStyle}>⚠ {hardwareErrors.amount}</div>}
+          </div>
+
+          <div className="form-group">
+            <label>Location *</label>
+            <input
+              value={hardwareProfile.location}
+              style={inputStyle(hardwareErrors.location)}
+              onChange={e => {
+                setHardwareProfile({ ...hardwareProfile, location: e.target.value });
+                setHardwareErrors({ ...hardwareErrors, location: '' });
+              }}/>
+            {hardwareErrors.location && <div style={errStyle}>⚠ {hardwareErrors.location}</div>}
+          </div>
+
+          <div className="form-group">
+            <label>Officer ID *</label>
+            <input
+              value={hardwareProfile.officer_id}
+              style={inputStyle(hardwareErrors.officer_id)}
+              onChange={e => {
+                setHardwareProfile({ ...hardwareProfile, officer_id: e.target.value });
+                setHardwareErrors({ ...hardwareErrors, officer_id: '' });
+              }}/>
+            {hardwareErrors.officer_id && <div style={errStyle}>⚠ {hardwareErrors.officer_id}</div>}
+          </div>
+
+          <div className="form-group">
+            <label>Device ID *</label>
+            <input
+              value={hardwareProfile.device_id}
+              style={inputStyle(hardwareErrors.device_id)}
+              onChange={e => {
+                setHardwareProfile({ ...hardwareProfile, device_id: e.target.value });
+                setHardwareErrors({ ...hardwareErrors, device_id: '' });
+              }}/>
+            {hardwareErrors.device_id && <div style={errStyle}>⚠ {hardwareErrors.device_id}</div>}
+          </div>
+        </div>
+
+        <div style={{
+          marginTop: '14px',
+          fontSize: '11px',
+          color: '#718096',
+          background: '#f7fafc',
+          border: '1px solid #e2e8f0',
+          borderRadius: '8px',
+          padding: '10px 12px'
+        }}>
+          Firmware now needs only WiFi credentials, Flask URL, and operator login credentials.
+          The active aid profile is pulled from the server automatically.
+        </div>
+      </div>
+
+      <div className="card">
+        <div style={{
+          display: 'flex', justifyContent: 'space-between',
+          alignItems: 'center', marginBottom: '16px', gap: '12px',
+          flexWrap: 'wrap'
+        }}>
+          <div>
+            <h3 style={{ margin: 0, padding: 0, borderBottom: 'none' }}>
+              Fingerprint Enrollment Queue
+            </h3>
+            <div style={{ fontSize: '12px', color: '#718096', marginTop: '6px' }}>
+              Registration completes only after the ESP32 enrolls the beneficiary fingerprint.
+            </div>
+          </div>
+          <button className="btn btn-blue btn-sm" onClick={refreshData}>
+            Refresh Queue
+          </button>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Beneficiary ID</th>
+                <th>Name</th>
+                <th>Slot</th>
+                <th>Device</th>
+                <th>Status</th>
+                <th>Updated</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {enrollmentRequests.length > 0 ? enrollmentRequests.map(item => (
+                <tr key={item.beneficiary_id}>
+                  <td style={{ fontFamily: 'monospace', fontWeight: 700 }}>#{item.beneficiary_id}</td>
+                  <td>{item.name}</td>
+                  <td>{item.slot_id}</td>
+                  <td>{item.device_id}</td>
+                  <td>
+                    <span className={`badge ${
+                      item.status === 'ACTIVE' ? 'badge-green' :
+                      item.status === 'FAILED_ENROLLMENT' || item.status === 'FAILED_BLOCKCHAIN'
+                        ? 'badge-red' : 'badge-orange'
+                    }`}>
+                      {item.status}
+                    </span>
+                  </td>
+                  <td style={{ fontSize: '12px' }}>{item.updated_at}</td>
+                  <td style={{ fontSize: '12px', color: '#718096' }}>
+                    {item.error_message || '-'}
+                  </td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan={7} style={{ textAlign: 'center', color: '#a0aec0', padding: '24px' }}>
+                    No enrollment jobs yet
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* ── Pending cache ── */}
       {pending.length > 0 && (
         <div className="card">
@@ -601,8 +870,8 @@ export default function NGODashboard() {
         <div className="form-grid">
 
           <div className="form-group">
-            <label>Fingerprint ID *</label>
-            <input type="number" placeholder="e.g. 1"
+            <label>Beneficiary ID / Fingerprint Slot Mapping *</label>
+            <input type="number" placeholder="e.g. 1001 (maps to slot 1)"
               value={regForm.id}
               style={inputStyle(regErrors.id)}
               onChange={e => {
@@ -673,10 +942,10 @@ export default function NGODashboard() {
         }}>
           <button className="btn btn-primary"
             onClick={handleRegister} disabled={loading}>
-            {loading ? 'Registering...' : '+ Register Beneficiary'}
+            {loading ? 'Queueing...' : '+ Queue Enrollment on Hardware'}
           </button>
           <span style={{ fontSize: '11px', color: '#a0aec0' }}>
-            * All fields are required
+            * Hardware enrollment completes first, then blockchain registration is finalised
           </span>
         </div>
       </div>

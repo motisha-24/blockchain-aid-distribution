@@ -73,6 +73,11 @@ export const advanceCycle   = () => api.post('/api/cycle/advance');
 export const getCampaigns = () => api.get('/api/campaigns');
 export const getCampaign  = (id) => api.get(`/api/campaign/${id}`);
 export const createCampaign = (data) => api.post('/api/campaign/create', data);
+export const getHardwareProfile = () => api.get('/api/hardware/profile');
+export const updateHardwareProfile = (data) => api.post('/api/hardware/profile', data);
+export const queueHardwareEnrollment = (data) => api.post('/api/hardware/enrollment/start', data);
+export const getEnrollmentRequests = () => api.get('/api/hardware/enrollment/list');
+export const getEnrollmentRequest = (id) => api.get(`/api/hardware/enrollment/${id}`);
 
 // ── Beneficiary ──────────────────────────────────────────────
 export const registerBeneficiary = (data) =>

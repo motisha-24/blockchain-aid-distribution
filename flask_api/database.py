@@ -76,6 +76,37 @@ def init_database():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS hardware_profile (
+            id          INTEGER PRIMARY KEY CHECK (id = 1),
+            aid_type    TEXT    NOT NULL,
+            aid_unit    TEXT    NOT NULL,
+            amount      INTEGER NOT NULL,
+            location    TEXT    NOT NULL,
+            officer_id  TEXT    NOT NULL DEFAULT 'ngo_officer',
+            device_id   TEXT    NOT NULL DEFAULT 'aidchain-field-01',
+            updated_at  TEXT    NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS beneficiary_enrollment_queue (
+            beneficiary_id INTEGER PRIMARY KEY,
+            slot_id        INTEGER NOT NULL,
+            name           TEXT    NOT NULL,
+            national_id    TEXT    NOT NULL,
+            phone          TEXT    NOT NULL,
+            location       TEXT    NOT NULL,
+            officer_id     TEXT    NOT NULL,
+            device_id      TEXT    NOT NULL,
+            status         TEXT    NOT NULL,
+            error_message  TEXT    DEFAULT '',
+            blockchain_tx  TEXT    DEFAULT '',
+            created_at     TEXT    NOT NULL,
+            updated_at     TEXT    NOT NULL
+        )
+    """)
+
     conn.commit()
 
     # ── Seed default users if table is empty ─────────────────
@@ -107,6 +138,26 @@ def init_database():
 
         conn.commit()
         print("[DB] Default users created successfully")
+
+    cursor.execute("SELECT COUNT(*) FROM hardware_profile")
+    profile_count = cursor.fetchone()[0]
+    if profile_count == 0:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            INSERT INTO hardware_profile
+            (id, aid_type, aid_unit, amount, location, officer_id, device_id, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "MAIZE",
+            "KG",
+            50,
+            "Gweru Ward 5",
+            "ngo_officer",
+            "aidchain-field-01",
+            now
+        ))
+        conn.commit()
+        print("[DB] Default hardware profile created")
 
     conn.close()
 
@@ -263,6 +314,19 @@ VALID_AID_TYPES = [
     "CLOTHES", "FERTILISER", "BLANKETS"
 ]
 
+VALID_AID_UNITS = [
+    "KG", "USD", "LITRES", "PACKETS", "UNITS"
+]
+
+VALID_ENROLLMENT_STATUSES = {
+    "PENDING_ENROLLMENT",
+    "ENROLLING",
+    "ENROLLED",
+    "ACTIVE",
+    "FAILED_ENROLLMENT",
+    "FAILED_BLOCKCHAIN"
+}
+
 
 def create_campaign(name, donor_label, aid_type, budget_total):
     aid_type_up = aid_type.strip().upper()
@@ -372,6 +436,196 @@ def release_campaign_budget(campaign_id, amount):
     conn.commit()
     conn.close()
     return {"success": True}
+
+
+def get_hardware_profile():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM hardware_profile WHERE id = 1")
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return {"success": False, "error": "Hardware profile not configured"}
+
+    return {"success": True, "profile": dict(row)}
+
+
+def update_hardware_profile(aid_type, aid_unit, amount, location,
+                            officer_id="ngo_officer",
+                            device_id="aidchain-field-01"):
+    aid_type_up = aid_type.strip().upper()
+    aid_unit_up = aid_unit.strip().upper()
+
+    if aid_type_up not in VALID_AID_TYPES:
+        return {"success": False, "error": f"Unknown aid type: {aid_type}"}
+    if aid_unit_up not in VALID_AID_UNITS:
+        return {"success": False, "error": f"Unknown aid unit: {aid_unit}"}
+    if amount <= 0:
+        return {"success": False, "error": "Amount must be positive"}
+    if not location.strip():
+        return {"success": False, "error": "Location is required"}
+    if not officer_id.strip():
+        return {"success": False, "error": "Officer ID is required"}
+    if not device_id.strip():
+        return {"success": False, "error": "Device ID is required"}
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("""
+        INSERT INTO hardware_profile
+        (id, aid_type, aid_unit, amount, location, officer_id, device_id, updated_at)
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            aid_type   = excluded.aid_type,
+            aid_unit   = excluded.aid_unit,
+            amount     = excluded.amount,
+            location   = excluded.location,
+            officer_id = excluded.officer_id,
+            device_id  = excluded.device_id,
+            updated_at = excluded.updated_at
+    """, (
+        aid_type_up,
+        aid_unit_up,
+        amount,
+        location.strip(),
+        officer_id.strip(),
+        device_id.strip(),
+        now
+    ))
+    conn.commit()
+    conn.close()
+
+    return get_hardware_profile()
+
+
+def queue_beneficiary_enrollment(beneficiary_id, name, national_id, phone,
+                                 location, officer_id, device_id):
+    if beneficiary_id <= 1000:
+        return {
+            "success": False,
+            "error": "Beneficiary ID must be greater than 1000 for slot mapping"
+        }
+
+    slot_id = beneficiary_id - 1000
+    if slot_id <= 0 or slot_id > 127:
+        return {
+            "success": False,
+            "error": "Beneficiary ID must map to AS608 slot range 1-127"
+        }
+
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO beneficiary_enrollment_queue
+        (beneficiary_id, slot_id, name, national_id, phone, location,
+         officer_id, device_id, status, error_message, blockchain_tx,
+         created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_ENROLLMENT', '', '', ?, ?)
+        ON CONFLICT(beneficiary_id) DO UPDATE SET
+            slot_id        = excluded.slot_id,
+            name           = excluded.name,
+            national_id    = excluded.national_id,
+            phone          = excluded.phone,
+            location       = excluded.location,
+            officer_id     = excluded.officer_id,
+            device_id      = excluded.device_id,
+            status         = 'PENDING_ENROLLMENT',
+            error_message  = '',
+            blockchain_tx  = '',
+            updated_at     = excluded.updated_at
+    """, (
+        beneficiary_id, slot_id, name.strip(), national_id.strip(),
+        phone.strip(), location.strip(), officer_id.strip(),
+        device_id.strip(), now, now
+    ))
+    conn.commit()
+    conn.close()
+    return get_enrollment_request(beneficiary_id)
+
+
+def get_enrollment_request(beneficiary_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM beneficiary_enrollment_queue
+        WHERE beneficiary_id = ?
+    """, (beneficiary_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return {"success": False, "error": "Enrollment request not found"}
+
+    return {"success": True, "request": dict(row)}
+
+
+def list_enrollment_requests():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM beneficiary_enrollment_queue
+        ORDER BY updated_at DESC, beneficiary_id DESC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return {"success": True, "requests": [dict(row) for row in rows]}
+
+
+def get_next_pending_enrollment(device_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM beneficiary_enrollment_queue
+        WHERE device_id = ?
+          AND status IN ('PENDING_ENROLLMENT', 'FAILED_ENROLLMENT')
+        ORDER BY created_at ASC, beneficiary_id ASC
+        LIMIT 1
+    """, (device_id.strip(),))
+    row = cursor.fetchone()
+
+    if not row:
+        conn.close()
+        return {"success": False, "error": "No pending enrollment job"}
+
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("""
+        UPDATE beneficiary_enrollment_queue
+        SET status = 'ENROLLING',
+            updated_at = ?
+        WHERE beneficiary_id = ?
+    """, (now, row["beneficiary_id"]))
+    conn.commit()
+    conn.close()
+    return get_enrollment_request(row["beneficiary_id"])
+
+
+def update_enrollment_status(beneficiary_id, status, error_message="",
+                             blockchain_tx=""):
+    if status not in VALID_ENROLLMENT_STATUSES:
+        return {"success": False, "error": f"Invalid status: {status}"}
+
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE beneficiary_enrollment_queue
+        SET status = ?, error_message = ?, blockchain_tx = ?, updated_at = ?
+        WHERE beneficiary_id = ?
+    """, (
+        status, error_message.strip(), blockchain_tx.strip(),
+        now, beneficiary_id
+    ))
+    conn.commit()
+    changed = cursor.rowcount
+    conn.close()
+
+    if changed == 0:
+        return {"success": False, "error": "Enrollment request not found"}
+
+    return get_enrollment_request(beneficiary_id)
 
 # ── Reactivate user account ───────────────────────────────────
 def reactivate_user(username):

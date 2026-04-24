@@ -7,14 +7,14 @@
 import sys
 import os
 import re
-import hashlib
 import time
 import threading
 import datetime
 import json
+from functools import wraps
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import jwt
@@ -39,7 +39,7 @@ from blockchain import (
     w3
 )
 from cache    import cache_transaction, sync_pending_to_blockchain, get_pending
-from sms      import send_sms, get_sms_log, send_failure_alert
+from sms      import get_sms_log, send_failure_alert, log_sms_event
 from database import (
     init_database,
     verify_login,
@@ -56,7 +56,14 @@ from database import (
     get_campaign,
     list_campaigns,
     reserve_campaign_budget,
-    release_campaign_budget
+    release_campaign_budget,
+    get_hardware_profile,
+    update_hardware_profile,
+    queue_beneficiary_enrollment,
+    get_enrollment_request,
+    list_enrollment_requests,
+    get_next_pending_enrollment,
+    update_enrollment_status
 )
 from flask_cors import CORS
 
@@ -163,6 +170,41 @@ def get_token_from_request():
     return auth.replace("Bearer ", "").strip()
 
 
+def require_auth(allowed_roles=None):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            token = get_token_from_request()
+            user = verify_token(token)
+            if not user:
+                return jsonify({"error": "Unauthorised"}), 401
+
+            if allowed_roles and user["role"] not in allowed_roles:
+                roles_text = ", ".join(allowed_roles)
+                return jsonify({
+                    "error": f"Unauthorised - allowed roles: {roles_text}"
+                }), 403
+
+            g.current_user = user
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def current_user():
+    return getattr(g, "current_user", None)
+
+
+def hardware_response(success: bool, action: str, message: str, **extra):
+    payload = {
+        "success": success,
+        "action": action,
+        "message": message
+    }
+    payload.update(extra)
+    return payload
+
+
 # ================================================================
 #  VALIDATION HELPER
 # ================================================================
@@ -234,11 +276,9 @@ def validate(data, rules):
 
 # ── Delete user permanently — admin only ──────────────────
 @app.route("/api/auth/users/<username>", methods=["DELETE"])
+@require_auth(["ADMIN"])
 def delete_user(username):
-    token = get_token_from_request()
-    user  = verify_token(token)
-    if not user or user["role"] != "ADMIN":
-        return jsonify({"error": "Unauthorised — Admin only"}), 403
+    user = current_user()
     if username == user["username"]:
         return jsonify({
             "error": "Cannot delete your own account"
@@ -276,6 +316,52 @@ def login():
         "role"    : user["role"],
         "name"    : user["name"],
         "username": username
+    }), 200
+
+
+@app.route("/api/hardware/login", methods=["POST"])
+@limiter.limit("10/minute")
+def hardware_login():
+    data = request.get_json() or {}
+    username = data.get("username", "").strip()
+    password = data.get("password", "").strip()
+    device_id = data.get("device_id", "unknown").strip()
+
+    if not username or not password:
+        return jsonify({
+            "success": False,
+            "action": "LOGIN_FAILED",
+            "message": "username and password are required"
+        }), 400
+
+    user = verify_login(username, password)
+    if not user:
+        return jsonify({
+            "success": False,
+            "action": "LOGIN_FAILED",
+            "message": "Invalid credentials"
+        }), 401
+
+    if user["role"] not in ["ADMIN", "NGO"]:
+        return jsonify({
+            "success": False,
+            "action": "LOGIN_FAILED",
+            "message": "Hardware access requires NGO or ADMIN role"
+        }), 403
+
+    update_last_login(username)
+    token = generate_token(username, user["role"])
+    print(f"[AUTH] Hardware login: {username} ({user['role']}) device={device_id}")
+
+    return jsonify({
+        "success": True,
+        "action": "LOGIN_OK",
+        "message": "Hardware login successful",
+        "token": token,
+        "role": user["role"],
+        "username": username,
+        "device_id": device_id,
+        "expires_in": JWT_EXP_DELTA_SECONDS
     }), 200
 
 
@@ -343,23 +429,28 @@ def verify():
     }), 200
 
 
+@app.route("/api/auth/refresh", methods=["POST"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
+def refresh_token():
+    user = current_user()
+    token = generate_token(user["username"], user["role"])
+    return jsonify({
+        "success": True,
+        "token": token,
+        "role": user["role"],
+        "username": user["username"],
+        "expires_in": JWT_EXP_DELTA_SECONDS
+    }), 200
 @app.route("/api/auth/users", methods=["GET"])
+@require_auth(["ADMIN"])
 def get_users():
-    token = get_token_from_request()
-    user  = verify_token(token)
-    if not user or user["role"] != "ADMIN":
-        return jsonify({"error": "Unauthorised — Admin only"}), 403
     return jsonify({"users": get_all_users()}), 200
 
 
 @app.route("/api/auth/users/create", methods=["POST"])
 @limiter.limit("10/minute")
+@require_auth(["ADMIN"])
 def create_new_user():
-    token = get_token_from_request()
-    user  = verify_token(token)
-    if not user or user["role"] != "ADMIN":
-        return jsonify({"error": "Unauthorised — Admin only"}), 403
-
     data   = request.get_json()
     errors = validate(data, {
         "username": {"required": True, "type": "str", "min": 3, "max": 50},
@@ -388,34 +479,20 @@ def create_new_user():
 
 
 @app.route("/api/campaigns", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
 def campaigns_list():
-    token = get_token_from_request()
-    user  = verify_token(token)
-    if not user:
-        return jsonify({"error": "Unauthorised"}), 401
-    if user["role"] not in ["ADMIN", "NGO"]:
-        return jsonify({"error": "Unauthorised — Admin or NGO only"}), 403
     return jsonify(list_campaigns()), 200
 
 
 @app.route("/api/campaign/<int:campaign_id>", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
 def campaign_details(campaign_id):
-    token = get_token_from_request()
-    user  = verify_token(token)
-    if not user:
-        return jsonify({"error": "Unauthorised"}), 401
-    if user["role"] not in ["ADMIN", "NGO"]:
-        return jsonify({"error": "Unauthorised — Admin or NGO only"}), 403
     return jsonify(get_campaign(campaign_id)), 200
 
 
 @app.route("/api/campaign/create", methods=["POST"])
+@require_auth(["ADMIN"])
 def create_new_campaign():
-    token = get_token_from_request()
-    user  = verify_token(token)
-    if not user or user["role"] != "ADMIN":
-        return jsonify({"error": "Unauthorised — Admin only"}), 403
-
     data = request.get_json()
     errors = validate(data, {
         "name": {"required": True, "type": "str", "min": 3, "max": 100},
@@ -437,12 +514,9 @@ def create_new_campaign():
 
 
 @app.route("/api/auth/users/password", methods=["POST"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def change_password():
-    token = get_token_from_request()
-    user  = verify_token(token)
-    if not user:
-        return jsonify({"error": "Unauthorised"}), 401
-
+    user = current_user()
     data         = request.get_json()
     target_user  = data.get("username", "").strip()
     new_password = data.get("new_password", "").strip()
@@ -476,11 +550,9 @@ def change_password():
 
 
 @app.route("/api/auth/users/<username>/deactivate", methods=["POST"])
+@require_auth(["ADMIN"])
 def disable_user(username):
-    token = get_token_from_request()
-    user  = verify_token(token)
-    if not user or user["role"] != "ADMIN":
-        return jsonify({"error": "Unauthorised — Admin only"}), 403
+    user = current_user()
     if username == user["username"]:
         return jsonify({
             "error": "Cannot deactivate your own account"
@@ -489,11 +561,8 @@ def disable_user(username):
 
 
 @app.route("/api/auth/users/<username>/reactivate", methods=["POST"])
+@require_auth(["ADMIN"])
 def enable_user(username):
-    token = get_token_from_request()
-    user  = verify_token(token)
-    if not user or user["role"] != "ADMIN":
-        return jsonify({"error": "Unauthorised — Admin only"}), 403
     return jsonify(reactivate_user(username)), 200
 
 
@@ -503,12 +572,14 @@ def enable_user(username):
 # ================================================================
 
 @app.route("/api/auth/failed-attempt", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
 def failed_attempt():
-    data       = request.get_json()
+    data       = request.get_json() or {}
     b_id       = data.get("beneficiary_id", "unknown")
     attempts   = int(data.get("attempts", 0))
     location   = data.get("location", "unknown")
     officer_id = data.get("officer_id", "unknown")
+    device_id  = data.get("device_id", "unknown")
 
     print(f"[SECURITY] Failed auth attempt {attempts} "
           f"for beneficiary {b_id} at {location}")
@@ -517,17 +588,29 @@ def failed_attempt():
         print(f"[SECURITY] SESSION LOCKED — "
               f"3 failed attempts for beneficiary {b_id}")
         send_failure_alert(officer_id, attempts)
-        return jsonify({
-            "success": True,
-            "action" : "SESSION_LOCKED",
-            "message": f"Session locked after {attempts} failed attempts"
-        }), 200
+        return jsonify(hardware_response(
+            True,
+            "SESSION_LOCKED",
+            f"Session locked after {attempts} failed attempts",
+            attempts=attempts,
+            locked=True,
+            beneficiary_id=b_id,
+            location=location,
+            officer_id=officer_id,
+            device_id=device_id
+        )), 200
 
-    return jsonify({
-        "success": True,
-        "action" : "RETRY",
-        "message": f"Attempt {attempts} — retry allowed"
-    }), 200
+    return jsonify(hardware_response(
+        True,
+        "RETRY_ALLOWED",
+        f"Attempt {attempts} - retry allowed",
+        attempts=attempts,
+        locked=False,
+        beneficiary_id=b_id,
+        location=location,
+        officer_id=officer_id,
+        device_id=device_id
+    )), 200
 
 
 # ================================================================
@@ -557,6 +640,7 @@ def index():
 
 @app.route("/api/beneficiary/register", methods=["POST"])
 @limiter.limit("10/minute")
+@require_auth(["ADMIN", "NGO"])
 def register():
     data   = request.get_json()
     errors = validate(data, {
@@ -603,6 +687,7 @@ def register():
 
 
 @app.route("/api/beneficiary/<int:b_id>", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def get_beneficiary_route(b_id):
     if b_id <= 0:
         return jsonify({"error": "Invalid beneficiary ID"}), 400
@@ -613,6 +698,7 @@ def get_beneficiary_route(b_id):
 
 
 @app.route("/api/beneficiary/<int:b_id>/registered", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def check_registered(b_id):
     if b_id <= 0:
         return jsonify({"error": "Invalid beneficiary ID"}), 400
@@ -620,6 +706,7 @@ def check_registered(b_id):
 
 
 @app.route("/api/beneficiary/<int:b_id>/status", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def collection_status(b_id):
     if b_id <= 0:
         return jsonify({"error": "Invalid beneficiary ID"}), 400
@@ -632,6 +719,7 @@ def collection_status(b_id):
 
 
 @app.route("/api/beneficiary/<int:b_id>/deactivate", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
 def deactivate(b_id):
     if b_id <= 0:
         return jsonify({"error": "Invalid beneficiary ID"}), 400
@@ -645,6 +733,7 @@ def deactivate(b_id):
 
 
 @app.route("/api/beneficiary/<int:b_id>/reactivate", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
 def reactivate(b_id):
     if b_id <= 0:
         return jsonify({"error": "Invalid beneficiary ID"}), 400
@@ -658,6 +747,7 @@ def reactivate(b_id):
 
 
 @app.route("/api/beneficiaries", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def get_all_beneficiaries():
     id_result = get_all_beneficiary_ids()
     if not id_result["success"]:
@@ -693,6 +783,7 @@ def get_all_beneficiaries():
 
 @app.route("/api/distribute", methods=["POST"])
 @limiter.limit("15/minute")
+@require_auth(["ADMIN", "NGO"])
 def distribute():
     data   = request.get_json()
     errors = validate(data, {
@@ -736,10 +827,20 @@ def distribute():
     # ── Duplicate check ───────────────────────────────────────
     check = has_collected(b_id, aid_type)
     if check["success"] and check["collected"]:
-        return jsonify({
-            "error": f"DUPLICATE: Beneficiary already received "
-                     f"{aid_type} this cycle"
-        }), 409
+        return jsonify(hardware_response(
+            False,
+            "DUPLICATE_BLOCKED",
+            f"Beneficiary already received {aid_type} this cycle",
+            duplicate=True,
+            mode="ONLINE",
+            notification="NO_SMS",
+            beneficiary_id=b_id,
+            aid_type=aid_type,
+            aid_unit=aid_unit,
+            amount=amount,
+            location=location,
+            campaign_id=campaign_id
+        )), 409
 
     # ── AUTO detect internet and route accordingly ────────────
     if w3.is_connected():
@@ -751,28 +852,38 @@ def distribute():
         result = distribute_aid(b_id, amount, aid_type, aid_unit, location)
 
         if result["success"]:
-            bene = get_beneficiary(b_id)
-            if bene["success"]:
-                send_sms(
-                    bene["phone"], bene["name"],
-                    amount, result["tx_hash"],
-                    aid_type, aid_unit
-                )
-            return jsonify({
-                "message"     : "Aid distributed successfully",
-                "mode"        : "ONLINE",
-                "aid_type"    : aid_type,
-                "aid_unit"    : aid_unit,
-                "amount"      : amount,
-                "location"    : location,
-                "campaign_id" : campaign_id,
-                "tx_hash"     : result["tx_hash"],
-                "block"       : result["block"]
-            }), 200
+            return jsonify(hardware_response(
+                True,
+                "DISTRIBUTED",
+                "Aid distributed successfully",
+                mode="ONLINE",
+                notification="HANDLED_BY_HARDWARE",
+                duplicate=False,
+                beneficiary_id=b_id,
+                aid_type=aid_type,
+                aid_unit=aid_unit,
+                amount=amount,
+                location=location,
+                campaign_id=campaign_id,
+                tx_hash=result["tx_hash"],
+                block=result["block"]
+            )), 200
         else:
             if campaign_id:
                 release_campaign_budget(campaign_id, amount)
-            return jsonify({"error": result["error"]}), 500
+            return jsonify(hardware_response(
+                False,
+                "DISTRIBUTION_FAILED",
+                result["error"],
+                mode="ONLINE",
+                duplicate=False,
+                beneficiary_id=b_id,
+                aid_type=aid_type,
+                aid_unit=aid_unit,
+                amount=amount,
+                location=location,
+                campaign_id=campaign_id
+            )), 500
     else:
         if campaign_id:
             reserve = reserve_campaign_budget(campaign_id, amount)
@@ -784,26 +895,26 @@ def distribute():
             data.get("officer_id", "unknown"),
             campaign_id
         )
-        bene = get_beneficiary(b_id)
-        if bene["success"]:
-            send_sms(
-                bene["phone"], bene["name"],
-                amount, f"PENDING-{cached['id']}",
-                aid_type, aid_unit
-            )
-        return jsonify({
-            "message"     : "No internet — transaction cached automatically",
-            "mode"        : "OFFLINE",
-            "cache_id"    : cached["id"],
-            "aid_type"    : aid_type,
-            "aid_unit"    : aid_unit,
-            "amount"      : amount,
-            "campaign_id" : campaign_id,
-            "status"      : "PENDING"
-        }), 200
+        return jsonify(hardware_response(
+            True,
+            "CACHED_FOR_SYNC",
+            "Blockchain unavailable - transaction cached by server",
+            mode="OFFLINE",
+            notification="HANDLED_BY_HARDWARE",
+            duplicate=False,
+            beneficiary_id=b_id,
+            cache_id=cached["id"],
+            aid_type=aid_type,
+            aid_unit=aid_unit,
+            amount=amount,
+            location=location,
+            campaign_id=campaign_id,
+            status="PENDING"
+        )), 200
 
 
 @app.route("/api/sync", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
 def sync():
     if not w3.is_connected():
         return jsonify({
@@ -819,6 +930,7 @@ def sync():
 
 
 @app.route("/api/cache/pending", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
 def pending():
     return jsonify({"pending": get_pending()}), 200
 
@@ -828,6 +940,7 @@ def pending():
 # ================================================================
 
 @app.route("/api/transaction/<int:tx_id>", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def transaction(tx_id):
     if tx_id <= 0:
         return jsonify({"error": "Invalid transaction ID"}), 400
@@ -838,11 +951,13 @@ def transaction(tx_id):
 
 
 @app.route("/api/transactions/total", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def total_transactions():
     return jsonify(get_total_transactions()), 200
 
 
 @app.route("/api/distributions/history", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def distribution_history():
     try:
         total_result = get_total_transactions()
@@ -893,11 +1008,13 @@ def distribution_history():
 # ================================================================
 
 @app.route("/api/cycle", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def current_cycle():
     return jsonify(get_current_cycle()), 200
 
 
 @app.route("/api/cycle/advance", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
 def next_cycle():
     result = advance_cycle()
     if result["success"]:
@@ -915,6 +1032,7 @@ def next_cycle():
 # ================================================================
 
 @app.route("/api/officer/authorise", methods=["POST"])
+@require_auth(["ADMIN"])
 def auth_officer():
     data = request.get_json()
     if not data.get("address", "").strip():
@@ -929,6 +1047,7 @@ def auth_officer():
 
 
 @app.route("/api/officer/revoke", methods=["POST"])
+@require_auth(["ADMIN"])
 def rev_officer():
     data = request.get_json()
     if not data.get("address", "").strip():
@@ -946,7 +1065,319 @@ def rev_officer():
 #  SMS ENDPOINTS
 # ================================================================
 
+@app.route("/api/hardware/ping", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def hardware_ping():
+    user = current_user()
+    cycle = get_current_cycle()
+    profile = get_hardware_profile()
+    return jsonify({
+        "success": True,
+        "action": "HARDWARE_READY",
+        "message": "Hardware API reachable",
+        "server_time": datetime.datetime.utcnow().isoformat() + "Z",
+        "blockchain_online": w3.is_connected(),
+        "current_cycle": cycle.get("cycle", 0),
+        "hardware_profile_ready": profile.get("success", False),
+        "role": user["role"],
+        "username": user["username"]
+    }), 200
+
+
+@app.route("/api/hardware/enrollment/start", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def start_hardware_enrollment():
+    data = request.get_json() or {}
+    errors = validate(data, {
+        "id": {"required": True, "type": "int", "min": 1001, "max": 1127},
+        "name": {"required": True, "type": "str", "min": 2, "max": 100},
+        "national_id": {"required": True, "national_id": True},
+        "phone": {"required": True, "phone": True},
+        "location": {"required": True, "type": "str", "min": 3, "max": 100},
+        "officer_id": {"required": True, "type": "str", "min": 3, "max": 50},
+        "device_id": {"required": True, "type": "str", "min": 3, "max": 100}
+    })
+
+    if errors:
+        return jsonify(hardware_response(
+            False,
+            "ENROLLMENT_INVALID",
+            " | ".join(errors)
+        )), 400
+
+    beneficiary_id = int(data["id"])
+    already_exists = is_registered(beneficiary_id)
+    if already_exists.get("registered"):
+        return jsonify(hardware_response(
+            False,
+            "ALREADY_REGISTERED",
+            f"Beneficiary ID {beneficiary_id} is already registered on blockchain"
+        )), 409
+
+    result = queue_beneficiary_enrollment(
+        beneficiary_id,
+        data["name"],
+        data["national_id"],
+        data["phone"],
+        data["location"],
+        data["officer_id"],
+        data["device_id"]
+    )
+
+    if not result["success"]:
+        return jsonify(hardware_response(
+            False,
+            "ENROLLMENT_INVALID",
+            result["error"]
+        )), 400
+
+    return jsonify(hardware_response(
+        True,
+        "ENROLLMENT_QUEUED",
+        "Beneficiary saved and queued for fingerprint enrollment",
+        request=result["request"]
+    )), 201
+
+
+@app.route("/api/hardware/enrollment/list", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def enrollment_request_list():
+    result = list_enrollment_requests()
+    return jsonify(result), 200
+
+
+@app.route("/api/hardware/enrollment/<int:beneficiary_id>", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def enrollment_request_status(beneficiary_id):
+    result = get_enrollment_request(beneficiary_id)
+    if not result["success"]:
+        return jsonify(hardware_response(
+            False,
+            "ENROLLMENT_NOT_FOUND",
+            result["error"]
+        )), 404
+    return jsonify(hardware_response(
+        True,
+        "ENROLLMENT_STATUS",
+        "Enrollment request loaded",
+        request=result["request"]
+    )), 200
+
+
+@app.route("/api/hardware/enrollment/next", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def next_enrollment_job():
+    device_id = request.args.get("device_id", "").strip()
+    if not device_id:
+        return jsonify(hardware_response(
+            False,
+            "DEVICE_REQUIRED",
+            "device_id query parameter is required"
+        )), 400
+
+    result = get_next_pending_enrollment(device_id)
+    if not result["success"]:
+        return jsonify(hardware_response(
+            False,
+            "NO_ENROLLMENT_JOB",
+            result["error"],
+            device_id=device_id
+        )), 404
+
+    return jsonify(hardware_response(
+        True,
+        "ENROLLMENT_JOB_READY",
+        "Pending fingerprint enrollment job loaded",
+        request=result["request"]
+    )), 200
+
+
+@app.route("/api/hardware/enrollment/result", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def enrollment_result():
+    data = request.get_json() or {}
+    errors = validate(data, {
+        "beneficiary_id": {"required": True, "type": "int", "min": 1001, "max": 1127},
+        "slot_id": {"required": True, "type": "int", "min": 1, "max": 127},
+        "device_id": {"required": True, "type": "str", "min": 3, "max": 100},
+        "success": {"required": True}
+    })
+    if errors:
+        return jsonify(hardware_response(
+            False,
+            "RESULT_INVALID",
+            " | ".join(errors)
+        )), 400
+
+    beneficiary_id = int(data["beneficiary_id"])
+    slot_id = int(data["slot_id"])
+    expected_slot = beneficiary_id - 1000
+    request_result = get_enrollment_request(beneficiary_id)
+    if not request_result["success"]:
+        return jsonify(hardware_response(
+            False,
+            "ENROLLMENT_NOT_FOUND",
+            request_result["error"]
+        )), 404
+
+    request_data = request_result["request"]
+    if request_data["device_id"] != data["device_id"].strip():
+        return jsonify(hardware_response(
+            False,
+            "DEVICE_MISMATCH",
+            "Enrollment result came from an unexpected device"
+        )), 409
+
+    if slot_id != expected_slot:
+        update_enrollment_status(
+            beneficiary_id,
+            "FAILED_ENROLLMENT",
+            f"Slot mismatch. Expected {expected_slot}, got {slot_id}"
+        )
+        return jsonify(hardware_response(
+            False,
+            "SLOT_MISMATCH",
+            f"Slot mismatch. Expected {expected_slot}, got {slot_id}"
+        )), 409
+
+    if not bool(data["success"]):
+        error_message = str(data.get("error", "Fingerprint enrollment failed"))
+        update_enrollment_status(
+            beneficiary_id,
+            "FAILED_ENROLLMENT",
+            error_message
+        )
+        return jsonify(hardware_response(
+            False,
+            "ENROLLMENT_FAILED",
+            error_message
+        )), 200
+
+    update_enrollment_status(beneficiary_id, "ENROLLED")
+    registration = register_beneficiary(
+        beneficiary_id,
+        request_data["name"],
+        request_data["national_id"],
+        request_data["phone"],
+        request_data["location"]
+    )
+
+    if not registration["success"]:
+        update_enrollment_status(
+            beneficiary_id,
+            "FAILED_BLOCKCHAIN",
+            registration.get("error", "Blockchain registration failed")
+        )
+        return jsonify(hardware_response(
+            False,
+            "BLOCKCHAIN_REGISTRATION_FAILED",
+            registration.get("error", "Blockchain registration failed")
+        )), 500
+
+    final_status = update_enrollment_status(
+        beneficiary_id,
+        "ACTIVE",
+        blockchain_tx=registration.get("tx_hash", "")
+    )
+    return jsonify(hardware_response(
+        True,
+        "BENEFICIARY_REGISTERED",
+        "Fingerprint enrolled and beneficiary registered on blockchain",
+        request=final_status.get("request"),
+        tx_hash=registration.get("tx_hash"),
+        block=registration.get("block")
+    )), 200
+
+
+@app.route("/api/hardware/profile", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def hardware_profile():
+    result = get_hardware_profile()
+    if not result["success"]:
+        return jsonify(hardware_response(
+            False,
+            "PROFILE_MISSING",
+            result["error"]
+        )), 404
+
+    profile = result["profile"]
+    return jsonify(hardware_response(
+        True,
+        "PROFILE_READY",
+        "Hardware profile loaded",
+        profile=profile
+    )), 200
+
+
+@app.route("/api/hardware/profile", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def update_hardware_profile_route():
+    data = request.get_json() or {}
+    errors = validate(data, {
+        "aid_type": {"required": True, "type": "str", "min": 2, "max": 50},
+        "aid_unit": {"required": True, "type": "str", "min": 1, "max": 20},
+        "amount": {"required": True, "type": "int", "min": 1},
+        "location": {"required": True, "type": "str", "min": 3, "max": 100},
+        "officer_id": {"required": True, "type": "str", "min": 3, "max": 50},
+        "device_id": {"required": True, "type": "str", "min": 3, "max": 100}
+    })
+
+    if errors:
+        return jsonify(hardware_response(
+            False,
+            "PROFILE_INVALID",
+            " | ".join(errors)
+        )), 400
+
+    result = update_hardware_profile(
+        data["aid_type"],
+        data["aid_unit"],
+        int(data["amount"]),
+        data["location"],
+        data["officer_id"],
+        data["device_id"]
+    )
+
+    if not result["success"]:
+        return jsonify(hardware_response(
+            False,
+            "PROFILE_INVALID",
+            result["error"]
+        )), 400
+
+    return jsonify(hardware_response(
+        True,
+        "PROFILE_UPDATED",
+        "Hardware profile updated",
+        profile=result["profile"]
+    )), 200
+
+@app.route("/api/hardware/sms-log", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def hardware_sms_log():
+    data = request.get_json() or {}
+    phone = data.get("phone", "").strip()
+    message = data.get("message", "").strip()
+    status = data.get("status", "SENT").strip().upper()
+
+    if not phone:
+        return jsonify({"error": "phone is required"}), 400
+    if not message:
+        return jsonify({"error": "message is required"}), 400
+
+    metadata = {
+        "beneficiary_id": data.get("beneficiary_id"),
+        "device_id": data.get("device_id", "unknown"),
+        "tx_hash": data.get("tx_hash"),
+        "source": "HARDWARE"
+    }
+
+    result = log_sms_event(phone, message, status=status, metadata=metadata)
+    return jsonify(result), 200
+
+
 @app.route("/api/sms/log", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def sms_log():
     return jsonify({"sms_log": get_sms_log()}), 200
 
@@ -956,6 +1387,7 @@ def sms_log():
 # ================================================================
 
 @app.route("/api/stats", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def stats():
     total_tx      = get_total_transactions()
     total_benes   = get_total_beneficiaries()
