@@ -4,7 +4,7 @@ import { useData } from "../context/DataContext";
 
 export default function DashboardScreen({ navigation }) {
   const { logout, user } = useAuth();
-  const { cycle, progress, queue, isSyncing, lastSyncAt } = useData();
+  const { cycle, progress, queue, isSyncing, lastSyncAt, hardwareEvents } = useData();
 
   const totals = progress || {
     total_beneficiaries: 0,
@@ -40,6 +40,39 @@ export default function DashboardScreen({ navigation }) {
           Last sync: {lastSyncAt ? new Date(lastSyncAt).toLocaleString() : "Not yet"}
         </Text>
       </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Real-time Distribution Feed</Text>
+        <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled={true}>
+          {hardwareEvents.length > 0 ? hardwareEvents.map((event, index) => (
+            <View key={index} style={{
+              padding: 8,
+              marginBottom: 4,
+              backgroundColor: event.event_type.includes('FAILED') ? '#fed7d7' :
+                               event.event_type.includes('SUCCESS') || event.event_type === 'BENEFICIARY_REGISTERED' ? '#c6f6d5' :
+                               '#e6fffa',
+              borderRadius: 6
+            }}>
+              <Text style={{ fontSize: 12, fontWeight: 'bold', marginBottom: 2 }}>
+                {event.timestamp} - {event.device_id}
+              </Text>
+              <Text style={{ fontSize: 14 }}>{event.message}</Text>
+              {event.details && <Text style={{ fontSize: 12, color: '#718096', marginTop: 2 }}>{event.details}</Text>}
+            </View>
+          )) : (
+            <Text style={{ textAlign: 'center', color: '#a0aec0', padding: 20 }}>
+              No activity yet
+            </Text>
+          )}
+        </ScrollView>
+      </View>
+
+      <Pressable
+        style={[styles.primaryBtn, { backgroundColor: "#38a169", marginBottom: 8 }]}
+        onPress={() => navigation.navigate("SessionSetup")}
+      >
+        <Text style={styles.primaryBtnLabel}>⚙️ Configure Distribution Session</Text>
+      </Pressable>
 
       <Pressable
         style={styles.primaryBtn}

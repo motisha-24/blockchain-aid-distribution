@@ -39,3 +39,18 @@ export async function distribute(payload) {
   const { data } = await client.post("/api/distribute", payload);
   return data;
 }
+
+export async function getHardwareProfile() {
+  const { data } = await client.get("/api/hardware/profile");
+  return data;
+}
+
+export async function updateHardwareProfile(payload) {
+  const { data } = await client.post("/api/hardware/profile", payload);
+  return data;
+}
+
+export async function getHardwareEvents(limit = 50) {
+  const { data } = await client.get(`/api/hardware/events?limit=${limit}`);
+  return data;
+}

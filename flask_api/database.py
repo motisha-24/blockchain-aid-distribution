@@ -9,6 +9,7 @@ import hashlib
 import os
 import datetime
 import bcrypt
+import json
 
 # ── Database file location ────────────────────────────────────
 DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
@@ -79,9 +80,7 @@ def init_database():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS hardware_profile (
             id          INTEGER PRIMARY KEY CHECK (id = 1),
-            aid_type    TEXT    NOT NULL,
-            aid_unit    TEXT    NOT NULL,
-            amount      INTEGER NOT NULL,
+            items       TEXT    NOT NULL,
             location    TEXT    NOT NULL,
             officer_id  TEXT    NOT NULL DEFAULT 'ngo_officer',
             device_id   TEXT    NOT NULL DEFAULT 'aidchain-field-01',
@@ -104,6 +103,18 @@ def init_database():
             blockchain_tx  TEXT    DEFAULT '',
             created_at     TEXT    NOT NULL,
             updated_at     TEXT    NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS hardware_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type  TEXT    NOT NULL,
+            message     TEXT    NOT NULL,
+            device_id   TEXT    NOT NULL,
+            officer_id  TEXT    NOT NULL,
+            timestamp   TEXT    NOT NULL,
+            details     TEXT    DEFAULT ''
         )
     """)
 
@@ -145,12 +156,10 @@ def init_database():
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
             INSERT INTO hardware_profile
-            (id, aid_type, aid_unit, amount, location, officer_id, device_id, updated_at)
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+            (id, items, location, officer_id, device_id, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?)
         """, (
-            "MAIZE",
-            "KG",
-            50,
+            json.dumps([{"aid_type": "MAIZE", "aid_unit": "KG", "amount": 50, "campaign_id": None}]),
             "Gweru Ward 5",
             "ngo_officer",
             "aidchain-field-01",
@@ -448,21 +457,46 @@ def get_hardware_profile():
     if not row:
         return {"success": False, "error": "Hardware profile not configured"}
 
-    return {"success": True, "profile": dict(row)}
+    profile = dict(row)
+    try:
+        profile["items"] = json.loads(profile["items"])
+    except:
+        profile["items"] = []
+
+    return {"success": True, "profile": profile}
 
 
-def update_hardware_profile(aid_type, aid_unit, amount, location,
+def update_hardware_profile(items, location,
                             officer_id="ngo_officer",
                             device_id="aidchain-field-01"):
-    aid_type_up = aid_type.strip().upper()
-    aid_unit_up = aid_unit.strip().upper()
+    if not isinstance(items, list) or len(items) == 0:
+        return {"success": False, "error": "Items must be a non-empty list"}
 
-    if aid_type_up not in VALID_AID_TYPES:
-        return {"success": False, "error": f"Unknown aid type: {aid_type}"}
-    if aid_unit_up not in VALID_AID_UNITS:
-        return {"success": False, "error": f"Unknown aid unit: {aid_unit}"}
-    if amount <= 0:
-        return {"success": False, "error": "Amount must be positive"}
+    validated_items = []
+    for item in items:
+        aid_type = item.get("aid_type", "").strip().upper()
+        aid_unit = item.get("aid_unit", "").strip().upper()
+        amount = item.get("amount", 0)
+        campaign_id = item.get("campaign_id")
+        
+        if aid_type not in VALID_AID_TYPES:
+            return {"success": False, "error": f"Unknown aid type: {aid_type}"}
+        if aid_unit not in VALID_AID_UNITS:
+            return {"success": False, "error": f"Unknown aid unit: {aid_unit}"}
+        try:
+            amount = int(amount)
+            if amount <= 0:
+                raise ValueError
+        except:
+            return {"success": False, "error": f"Amount for {aid_type} must be positive"}
+            
+        validated_items.append({
+            "aid_type": aid_type,
+            "aid_unit": aid_unit,
+            "amount": amount,
+            "campaign_id": campaign_id
+        })
+
     if not location.strip():
         return {"success": False, "error": "Location is required"}
     if not officer_id.strip():
@@ -475,20 +509,16 @@ def update_hardware_profile(aid_type, aid_unit, amount, location,
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute("""
         INSERT INTO hardware_profile
-        (id, aid_type, aid_unit, amount, location, officer_id, device_id, updated_at)
-        VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+        (id, items, location, officer_id, device_id, updated_at)
+        VALUES (1, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-            aid_type   = excluded.aid_type,
-            aid_unit   = excluded.aid_unit,
-            amount     = excluded.amount,
+            items      = excluded.items,
             location   = excluded.location,
             officer_id = excluded.officer_id,
             device_id  = excluded.device_id,
             updated_at = excluded.updated_at
     """, (
-        aid_type_up,
-        aid_unit_up,
-        amount,
+        json.dumps(validated_items),
         location.strip(),
         officer_id.strip(),
         device_id.strip(),
@@ -650,3 +680,34 @@ def delete_user_db(username):
     conn.commit()
     conn.close()
     return {"success": True, "message": f"User {username} permanently deleted"}
+
+
+# ── Hardware Events Logging ───────────────────────────────────
+def log_hardware_event(event_type, message, device_id, officer_id, details=""):
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO hardware_events
+        (event_type, message, device_id, officer_id, timestamp, details)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        event_type.strip(), message.strip(), device_id.strip(),
+        officer_id.strip(), now, details.strip()
+    ))
+    conn.commit()
+    conn.close()
+    return {"success": True}
+
+
+def get_recent_hardware_events(limit=50):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM hardware_events
+        ORDER BY timestamp DESC
+        LIMIT ?
+    """, (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    return {"success": True, "events": [dict(row) for row in rows]}

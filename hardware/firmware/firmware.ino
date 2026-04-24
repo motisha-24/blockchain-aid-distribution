@@ -42,6 +42,7 @@ String ACTIVE_AID_TYPE = "MAIZE";
 String ACTIVE_AID_UNIT = "KG";
 int ACTIVE_AID_AMOUNT = 50;
 String ACTIVE_LOCATION = "Gweru Ward 5";
+String ACTIVE_ITEMS_JSON = "[{\"aid_type\":\"MAIZE\",\"aid_unit\":\"KG\",\"amount\":50}]";
 
 // ----------------------------------------------------------------
 // Pin and hardware setup
@@ -413,17 +414,23 @@ bool fetchHardwareProfile() {
     return false;
   }
 
-  ACTIVE_AID_TYPE = String((const char*)(profile["aid_type"] | ACTIVE_AID_TYPE.c_str()));
-  ACTIVE_AID_UNIT = String((const char*)(profile["aid_unit"] | ACTIVE_AID_UNIT.c_str()));
-  ACTIVE_AID_AMOUNT = profile["amount"] | ACTIVE_AID_AMOUNT;
   ACTIVE_LOCATION = String((const char*)(profile["location"] | ACTIVE_LOCATION.c_str()));
   OFFICER_ID = String((const char*)(profile["officer_id"] | OFFICER_ID.c_str()));
   DEVICE_ID = String((const char*)(profile["device_id"] | DEVICE_ID.c_str()));
 
-  Serial.printf("[PROFILE] %s %d %s @ %s | officer=%s | device=%s\n",
-                ACTIVE_AID_TYPE.c_str(),
-                ACTIVE_AID_AMOUNT,
-                ACTIVE_AID_UNIT.c_str(),
+  JsonArray items = profile["items"];
+  if (!items.isNull() && items.size() > 0) {
+    ACTIVE_ITEMS_JSON = "";
+    serializeJson(items, ACTIVE_ITEMS_JSON);
+    
+    // Fallback for SMS building (just takes the first item)
+    ACTIVE_AID_TYPE = String((const char*)(items[0]["aid_type"] | "AID"));
+    ACTIVE_AID_UNIT = String((const char*)(items[0]["aid_unit"] | "UNITS"));
+    ACTIVE_AID_AMOUNT = items[0]["amount"] | 1;
+  }
+
+  Serial.printf("[PROFILE] Profile fetched with %d items @ %s | officer=%s | device=%s\n",
+                items.size(),
                 ACTIVE_LOCATION.c_str(),
                 OFFICER_ID.c_str(),
                 DEVICE_ID.c_str());
@@ -696,23 +703,46 @@ void handleDistributeResponse(int beneficiaryId, int httpStatus,
   Serial.printf("[API] Action: %s | Message: %s\n",
                 action.c_str(), message.c_str());
 
-  if (httpStatus == 200 && action == "DISTRIBUTED") {
+  if (httpStatus == 200 && action == "BATCH_PROCESSED") {
     signalSuccess();
-    String txHash = String((const char*)(doc["tx_hash"] | ""));
+    
+    // Since it's a batch, find the first successful transaction hash or cache ID
+    String txHash = "BATCH-SUCCESS";
+    JsonArray results = doc["results"].as<JsonArray>();
+    for (JsonObject r : results) {
+        if (r["success"] == true) {
+            if (r.containsKey("tx_hash")) {
+                txHash = String((const char*)(r["tx_hash"]));
+                break;
+            } else if (r.containsKey("cache_id")) {
+                txHash = "CACHE-" + String((int)(r["cache_id"]));
+                break;
+            }
+        }
+    }
+    
     handleSuccessfulDistribution(beneficiaryId, txHash);
     return;
   }
 
   if (httpStatus == 200 && action == "CACHED_FOR_SYNC") {
     signalCached();
-    String cacheRef = "CACHE-" + String((int)(doc["cache_id"] | 0));
+    // Use first cache_id from batch results
+    String cacheRef = "BATCH-CACHE";
+    JsonArray results = doc["results"].as<JsonArray>();
+    for (JsonObject r : results) {
+        if (r["success"] == true && r.containsKey("cache_id")) {
+            cacheRef = "CACHE-" + String((int)(r["cache_id"]));
+            break;
+        }
+    }
     handleSuccessfulDistribution(beneficiaryId, cacheRef);
     return;
   }
 
-  if (httpStatus == 409 && action == "DUPLICATE_BLOCKED") {
+  if (httpStatus == 409 && (action == "DUPLICATE_BLOCKED" || action == "BATCH_FAILED")) {
     signalDuplicate();
-    Serial.println("[API] Duplicate distribution blocked.");
+    Serial.println("[API] Batch or duplicate distribution blocked.");
     return;
   }
 
@@ -740,7 +770,7 @@ void submitDistribution(int beneficiaryId) {
   fetchHardwareProfile();
 
   HTTPClient http;
-  http.begin(endpointUrl("/api/distribute"));
+  http.begin(endpointUrl("/api/distribute/batch"));
   if (!addJsonHeaders(http)) {
     http.end();
     Serial.println("[AUTH] Missing JWT token.");
@@ -748,14 +778,15 @@ void submitDistribution(int beneficiaryId) {
     return;
   }
 
-  DynamicJsonDocument doc(768);
+  DynamicJsonDocument doc(1024);
   doc["beneficiary_id"] = beneficiaryId;
-  doc["amount"] = ACTIVE_AID_AMOUNT;
-  doc["aid_type"] = ACTIVE_AID_TYPE;
-  doc["aid_unit"] = ACTIVE_AID_UNIT;
   doc["location"] = ACTIVE_LOCATION;
   doc["officer_id"] = OFFICER_ID;
   doc["device_id"] = DEVICE_ID;
+
+  DynamicJsonDocument itemsDoc(512);
+  deserializeJson(itemsDoc, ACTIVE_ITEMS_JSON);
+  doc["items"] = itemsDoc.as<JsonArray>();
 
   String body;
   serializeJson(doc, body);
@@ -764,7 +795,7 @@ void submitDistribution(int beneficiaryId) {
   String response = http.getString();
   http.end();
 
-  Serial.printf("[API] /api/distribute HTTP %d\n", status);
+  Serial.printf("[API] /api/distribute/batch HTTP %d\n", status);
   Serial.printf("[API] Body: %s\n", response.c_str());
 
   handleDistributeResponse(beneficiaryId, status, response);

@@ -12,7 +12,7 @@ import {
 } from 'recharts';
 import DashboardHero from '../components/DashboardHero';
 import StatCard from '../components/StatCard';
-import { getStats, getSMSLog } from '../services/api';
+import { getStats, getSMSLog, getHardwareEvents } from '../services/api';
 
 const COLORS = [
   '#1a2d5a', '#38a169', '#d69e2e',
@@ -22,6 +22,7 @@ const COLORS = [
 export default function DonorDashboard() {
   const [stats, setStats] = useState({});
   const [smsLog, setSmsLog] = useState([]);
+  const [hardwareEvents, setHardwareEvents] = useState([]);
 
   const normaliseLogEntry = (entry) => {
     if (typeof entry === 'string') {
@@ -51,16 +52,52 @@ export default function DonorDashboard() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [s, sms] = await Promise.all([getStats(), getSMSLog()]);
+        const [s, sms, he] = await Promise.all([getStats(), getSMSLog(), getHardwareEvents()]);
         setStats(s.data);
         setSmsLog(sms.data.sms_log || []);
+        setHardwareEvents(he.data.events || []);
       } catch {}
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 15000);
+    const interval = setInterval(fetchData, 5000); // Poll every 5 seconds for live updates
     return () => clearInterval(interval);
   }, []);
+
+  const getLiveDistributionStats = () => {
+    const today = new Date().toISOString().split('T')[0];
+    const todayEvents = hardwareEvents.filter(event => event.timestamp.startsWith(today));
+    
+    let beneficiariesServed = 0;
+    const aidDistributed = {};
+    let pending = 0;
+
+    todayEvents.forEach(event => {
+      if (event.event_type === 'AID_DISTRIBUTED') {
+        beneficiariesServed++;
+        const match = event.message.match(/(\w+)\s+(\d+)\s+(\w+)\s+distributed/);
+        if (match) {
+          const aidType = match[1];
+          const amount = parseInt(match[2]);
+          const unit = match[3];
+          const key = `${aidType} ${unit}`;
+          aidDistributed[key] = (aidDistributed[key] || 0) + amount;
+        }
+      } else if (event.event_type === 'DUPLICATE_BLOCKED') {
+        // Count as served but not new distribution
+        beneficiariesServed++;
+      }
+    });
+
+    // Count pending enrollments as pending
+    pending = hardwareEvents.filter(event => 
+      event.event_type.includes('PENDING') || event.event_type.includes('ENROLLING')
+    ).length;
+
+    return { beneficiariesServed, aidDistributed, pending };
+  };
+
+  const liveStats = getLiveDistributionStats();
 
   const aidTypeData = Array.isArray(stats.aid_type_breakdown)
     ? stats.aid_type_breakdown.map(entry => {
@@ -113,6 +150,43 @@ export default function DonorDashboard() {
         <StatCard label="Current Cycle" value={stats.current_cycle} color="#d69e2e" icon="Cycle" sub="Distribution round" />
         <StatCard label="SMS Notifications" value={smsLog.length} color="#805ad5" icon="SMS" sub="Beneficiaries notified" />
         <StatCard label="Blockchain Status" value={stats.blockchain_online ? 'Verified' : 'Offline'} color={stats.blockchain_online ? '#38a169' : '#e53e3e'} icon="Chain" sub="Immutable record" />
+      </div>
+
+      {/* ── Live Distribution Tracking ── */}
+      <div className="card">
+        <h3>📊 Live Distribution Tracking</h3>
+        <div style={{ fontSize: '14px', color: '#4a5568', marginBottom: '16px' }}>
+          Real-time overview of today's aid distribution progress.
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px' }}>
+          <div style={{ flex: '1', minWidth: '200px' }}>
+            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1a2d5a' }}>
+              {liveStats.beneficiariesServed}
+            </div>
+            <div style={{ fontSize: '14px', color: '#718096' }}>
+              Beneficiaries served today
+            </div>
+          </div>
+          <div style={{ flex: '1', minWidth: '200px' }}>
+            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#38a169' }}>
+              {Object.keys(liveStats.aidDistributed).length > 0 ? 
+                Object.entries(liveStats.aidDistributed).map(([key, amount]) => `${amount} ${key}`).join(', ') : 
+                '0 items'
+              }
+            </div>
+            <div style={{ fontSize: '14px', color: '#718096' }}>
+              Aid distributed today
+            </div>
+          </div>
+          <div style={{ flex: '1', minWidth: '200px' }}>
+            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#d69e2e' }}>
+              {liveStats.pending}
+            </div>
+            <div style={{ fontSize: '14px', color: '#718096' }}>
+              Pending operations
+            </div>
+          </div>
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>

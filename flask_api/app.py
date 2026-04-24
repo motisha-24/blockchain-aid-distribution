@@ -63,7 +63,9 @@ from database import (
     get_enrollment_request,
     list_enrollment_requests,
     get_next_pending_enrollment,
-    update_enrollment_status
+    update_enrollment_status,
+    log_hardware_event,
+    get_recent_hardware_events
 )
 from flask_cors import CORS
 
@@ -827,6 +829,12 @@ def distribute():
     # ── Duplicate check ───────────────────────────────────────
     check = has_collected(b_id, aid_type)
     if check["success"] and check["collected"]:
+        log_hardware_event(
+            "DUPLICATE_BLOCKED",
+            f"Beneficiary {b_id} already received {aid_type} this cycle",
+            data.get("device_id", "web"),
+            current_user()["username"]
+        )
         return jsonify(hardware_response(
             False,
             "DUPLICATE_BLOCKED",
@@ -852,6 +860,13 @@ def distribute():
         result = distribute_aid(b_id, amount, aid_type, aid_unit, location)
 
         if result["success"]:
+            log_hardware_event(
+                "AID_DISTRIBUTED",
+                f"{aid_type} {amount} {aid_unit} distributed to beneficiary {b_id}",
+                data.get("device_id", "web"),
+                current_user()["username"],
+                f"Tx: {result['tx_hash']}"
+            )
             return jsonify(hardware_response(
                 True,
                 "DISTRIBUTED",
@@ -869,6 +884,12 @@ def distribute():
                 block=result["block"]
             )), 200
         else:
+            log_hardware_event(
+                "DISTRIBUTION_FAILED",
+                f"Distribution failed for beneficiary {b_id}: {result['error']}",
+                data.get("device_id", "web"),
+                current_user()["username"]
+            )
             if campaign_id:
                 release_campaign_budget(campaign_id, amount)
             return jsonify(hardware_response(
@@ -911,6 +932,115 @@ def distribute():
             campaign_id=campaign_id,
             status="PENDING"
         )), 200
+
+
+@app.route("/api/distribute/batch", methods=["POST"])
+@limiter.limit("15/minute")
+@require_auth(["ADMIN", "NGO"])
+def distribute_batch():
+    data = request.get_json() or {}
+    
+    if "beneficiary_id" not in data or "items" not in data or "location" not in data:
+        return jsonify({"error": "beneficiary_id, items, and location are required"}), 400
+
+    b_id = int(data["beneficiary_id"])
+    location = data["location"].strip()
+    items = data["items"]
+    officer_id = data.get("officer_id", "unknown")
+    
+    if not isinstance(items, list) or len(items) == 0:
+        return jsonify({"error": "items must be a non-empty array"}), 400
+
+    results = []
+    
+    # Process each item
+    for item in items:
+        aid_type = item.get("aid_type", "").upper().strip()
+        aid_unit = item.get("aid_unit", "").upper().strip()
+        amount = int(item.get("amount", 0))
+        campaign_id = item.get("campaign_id")
+        
+        # ── Duplicate check ───────────────────────────────────────
+        check = has_collected(b_id, aid_type)
+        if check["success"] and check["collected"]:
+            results.append({
+                "success": False,
+                "action": "DUPLICATE_BLOCKED",
+                "message": f"Beneficiary already received {aid_type} this cycle",
+                "aid_type": aid_type
+            })
+            continue
+            
+        if campaign_id:
+            try:
+                campaign_id = int(campaign_id)
+            except:
+                campaign_id = None
+                
+        if w3.is_connected():
+            if campaign_id:
+                reserve = reserve_campaign_budget(campaign_id, amount)
+                if not reserve["success"]:
+                    results.append({"success": False, "aid_type": aid_type, "error": reserve["error"]})
+                    continue
+
+            dist_result = distribute_aid(b_id, amount, aid_type, aid_unit, location)
+
+            if dist_result["success"]:
+                results.append({
+                    "success": True,
+                    "action": "DISTRIBUTED",
+                    "aid_type": aid_type,
+                    "amount": amount,
+                    "tx_hash": dist_result["tx_hash"]
+                })
+            else:
+                if campaign_id:
+                    release_campaign_budget(campaign_id, amount)
+                results.append({
+                    "success": False,
+                    "action": "DISTRIBUTION_FAILED",
+                    "aid_type": aid_type,
+                    "error": dist_result["error"]
+                })
+        else:
+            if campaign_id:
+                reserve = reserve_campaign_budget(campaign_id, amount)
+                if not reserve["success"]:
+                    results.append({"success": False, "aid_type": aid_type, "error": reserve["error"]})
+                    continue
+                    
+            cached = cache_transaction(
+                b_id, amount, aid_type, aid_unit, location,
+                officer_id, campaign_id
+            )
+            results.append({
+                "success": True,
+                "action": "CACHED_FOR_SYNC",
+                "aid_type": aid_type,
+                "cache_id": cached["id"]
+            })
+
+    # Find if ANY item was distributed or cached
+    any_success = any(r.get("success") for r in results)
+    
+    if any_success:
+        return jsonify(hardware_response(
+            True,
+            "BATCH_PROCESSED",
+            "Batch distribution processed",
+            beneficiary_id=b_id,
+            results=results
+        )), 200
+    else:
+        # All failed or all blocked
+        return jsonify(hardware_response(
+            False,
+            "BATCH_FAILED",
+            "No items were successfully distributed",
+            beneficiary_id=b_id,
+            results=results
+        )), 409
 
 
 @app.route("/api/sync", methods=["POST"])
@@ -1234,6 +1364,13 @@ def enrollment_result():
             "FAILED_ENROLLMENT",
             f"Slot mismatch. Expected {expected_slot}, got {slot_id}"
         )
+        log_hardware_event(
+            "ENROLLMENT_FAILED",
+            f"Slot mismatch for beneficiary {beneficiary_id}",
+            data["device_id"],
+            request_data["officer_id"],
+            f"Expected slot {expected_slot}, got {slot_id}"
+        )
         return jsonify(hardware_response(
             False,
             "SLOT_MISMATCH",
@@ -1247,6 +1384,13 @@ def enrollment_result():
             "FAILED_ENROLLMENT",
             error_message
         )
+        log_hardware_event(
+            "ENROLLMENT_FAILED",
+            f"Fingerprint enrollment failed for beneficiary {beneficiary_id}",
+            data["device_id"],
+            request_data["officer_id"],
+            error_message
+        )
         return jsonify(hardware_response(
             False,
             "ENROLLMENT_FAILED",
@@ -1254,6 +1398,12 @@ def enrollment_result():
         )), 200
 
     update_enrollment_status(beneficiary_id, "ENROLLED")
+    log_hardware_event(
+        "ENROLLMENT_SUCCESS",
+        f"Fingerprint enrolled for beneficiary {beneficiary_id} in slot {slot_id}",
+        data["device_id"],
+        request_data["officer_id"]
+    )
     registration = register_beneficiary(
         beneficiary_id,
         request_data["name"],
@@ -1268,6 +1418,13 @@ def enrollment_result():
             "FAILED_BLOCKCHAIN",
             registration.get("error", "Blockchain registration failed")
         )
+        log_hardware_event(
+            "BLOCKCHAIN_FAILED",
+            f"Blockchain registration failed for beneficiary {beneficiary_id}",
+            data["device_id"],
+            request_data["officer_id"],
+            registration.get("error", "Blockchain registration failed")
+        )
         return jsonify(hardware_response(
             False,
             "BLOCKCHAIN_REGISTRATION_FAILED",
@@ -1278,6 +1435,13 @@ def enrollment_result():
         beneficiary_id,
         "ACTIVE",
         blockchain_tx=registration.get("tx_hash", "")
+    )
+    log_hardware_event(
+        "BENEFICIARY_REGISTERED",
+        f"Beneficiary {beneficiary_id} fully registered on blockchain",
+        data["device_id"],
+        request_data["officer_id"],
+        f"Tx: {registration.get('tx_hash', '')}"
     )
     return jsonify(hardware_response(
         True,
@@ -1313,10 +1477,15 @@ def hardware_profile():
 @require_auth(["ADMIN", "NGO"])
 def update_hardware_profile_route():
     data = request.get_json() or {}
+    
+    if "items" not in data or not isinstance(data["items"], list) or len(data["items"]) == 0:
+        return jsonify(hardware_response(
+            False,
+            "PROFILE_INVALID",
+            "items must be a non-empty list"
+        )), 400
+        
     errors = validate(data, {
-        "aid_type": {"required": True, "type": "str", "min": 2, "max": 50},
-        "aid_unit": {"required": True, "type": "str", "min": 1, "max": 20},
-        "amount": {"required": True, "type": "int", "min": 1},
         "location": {"required": True, "type": "str", "min": 3, "max": 100},
         "officer_id": {"required": True, "type": "str", "min": 3, "max": 50},
         "device_id": {"required": True, "type": "str", "min": 3, "max": 100}
@@ -1330,9 +1499,7 @@ def update_hardware_profile_route():
         )), 400
 
     result = update_hardware_profile(
-        data["aid_type"],
-        data["aid_unit"],
-        int(data["amount"]),
+        data["items"],
         data["location"],
         data["officer_id"],
         data["device_id"]
@@ -1408,6 +1575,20 @@ def stats():
 # ================================================================
 #  RUN SERVER
 # ================================================================
+@app.route("/api/hardware/events", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
+def get_hardware_events():
+    limit = request.args.get("limit", 50, type=int)
+    if limit < 1 or limit > 200:
+        limit = 50
+
+    result = get_recent_hardware_events(limit)
+    if not result["success"]:
+        return jsonify({"error": result["error"]}), 500
+
+    return jsonify({"events": result["events"]}), 200
+
+
 if __name__ == "__main__":
     print("=" * 55)
     print("  Blockchain Aid Distribution API v2.0")

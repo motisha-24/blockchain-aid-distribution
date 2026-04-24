@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { distribute } from "../api/endpoints";
+import { distribute, getHardwareEvents } from "../api/endpoints";
 import { APP_SYNC } from "../config/env";
 import { addToQueue, getQueue, saveQueue } from "../storage/localStore";
 import {
@@ -32,6 +32,7 @@ export function DataProvider({ children }) {
   const [queue, setQueue] = useState([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncAt, setLastSyncAt] = useState(null);
+  const [hardwareEvents, setHardwareEvents] = useState([]);
   const timerRef = useRef(null);
 
   const hydrate = useCallback(async () => {
@@ -60,6 +61,8 @@ export function DataProvider({ children }) {
       setCycle(latest.cycle || { cycle: 0 });
       setProgress(latest.progress || null);
       setQueue(await getQueue());
+      const events = await getHardwareEvents(20); // Fetch last 20 events for mobile
+      setHardwareEvents(events.events || []);
       setLastSyncAt(new Date().toISOString());
     } finally {
       setIsSyncing(false);
@@ -137,6 +140,7 @@ export function DataProvider({ children }) {
       queue,
       isSyncing,
       lastSyncAt,
+      hardwareEvents,
       syncNow,
       distributeWithOfflineFallback,
       async markQueueAcknowledged(queueId) {
@@ -152,6 +156,7 @@ export function DataProvider({ children }) {
       queue,
       isSyncing,
       lastSyncAt,
+      hardwareEvents,
       syncNow,
       distributeWithOfflineFallback,
     ]

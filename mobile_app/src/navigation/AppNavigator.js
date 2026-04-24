@@ -8,6 +8,7 @@ import DashboardScreen from "../screens/DashboardScreen";
 import LoginScreen from "../screens/LoginScreen";
 import QueueDiagnosticsScreen from "../screens/QueueDiagnosticsScreen";
 import UnlockScreen from "../screens/UnlockScreen";
+import SessionSetupScreen from "../screens/SessionSetupScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -44,6 +45,7 @@ export default function AppNavigator() {
         ) : (
           <>
             <Stack.Screen name="Dashboard" component={DashboardScreen} />
+            <Stack.Screen name="SessionSetup" component={SessionSetupScreen} options={{ title: "Configure Session" }} />
             <Stack.Screen name="Beneficiaries" component={BeneficiariesScreen} />
             <Stack.Screen
               name="QueueDiagnostics"

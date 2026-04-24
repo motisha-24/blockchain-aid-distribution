@@ -15,7 +15,8 @@ import {
   reactivateBeneficiary, getAllBeneficiaries,
   getDistributionHistory, getCampaigns,
   getHardwareProfile, updateHardwareProfile,
-  queueHardwareEnrollment, getEnrollmentRequests
+  queueHardwareEnrollment, getEnrollmentRequests,
+  getHardwareEvents
 } from '../services/api';
 
 const AID_TYPES = [
@@ -44,6 +45,7 @@ export default function NGODashboard() {
     device_id: 'aidchain-field-01'
   });
   const [hardwareErrors, setHardwareErrors] = useState({});
+  const [hardwareEvents, setHardwareEvents] = useState([]);
 
   // ── Registration form ──────────────────────────────────────
   const [regForm, setRegForm] = useState({
@@ -81,8 +83,8 @@ export default function NGODashboard() {
   useEffect(() => {
     const fetchInitial = async () => {
       try {
-        const [s, p, c, h, e] = await Promise.allSettled([
-          getStats(), getPending(), getCampaigns(), getHardwareProfile(), getEnrollmentRequests()
+        const [s, p, c, h, e, he] = await Promise.allSettled([
+          getStats(), getPending(), getCampaigns(), getHardwareProfile(), getEnrollmentRequests(), getHardwareEvents()
         ]);
         if (s.status === 'fulfilled') setStats(s.value.data);
         if (p.status === 'fulfilled') setPending(p.value.data.pending || []);
@@ -93,17 +95,20 @@ export default function NGODashboard() {
         if (e.status === 'fulfilled') {
           setEnrollmentRequests(e.value.data.requests || []);
         }
+        if (he.status === 'fulfilled') {
+          setHardwareEvents(he.value.data.events || []);
+        }
       } catch {}
     };
     fetchInitial();
-    const interval = setInterval(fetchInitial, 10000);
+    const interval = setInterval(fetchInitial, 5000); // Poll every 5 seconds for live updates
     return () => clearInterval(interval);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshData = async () => {
     try {
-      const [s, p, c, h, e] = await Promise.allSettled([
-        getStats(), getPending(), getCampaigns(), getHardwareProfile(), getEnrollmentRequests()
+      const [s, p, c, h, e, he] = await Promise.allSettled([
+        getStats(), getPending(), getCampaigns(), getHardwareProfile(), getEnrollmentRequests(), getHardwareEvents()
       ]);
       if (s.status === 'fulfilled') setStats(s.value.data);
       if (p.status === 'fulfilled') setPending(p.value.data.pending || []);
@@ -113,6 +118,9 @@ export default function NGODashboard() {
       }
       if (e.status === 'fulfilled') {
         setEnrollmentRequests(e.value.data.requests || []);
+      }
+      if (he.status === 'fulfilled') {
+        setHardwareEvents(he.value.data.events || []);
       }
     } catch {}
   };
@@ -639,125 +647,6 @@ const handleRegister = async () => {
           icon="⛓️" sub="Ganache node"/>
       </div>
 
-      <div className="card">
-        <div style={{
-          display: 'flex', justifyContent: 'space-between',
-          alignItems: 'center', marginBottom: '16px', gap: '12px',
-          flexWrap: 'wrap'
-        }}>
-          <div>
-            <h3 style={{ margin: 0, padding: 0, borderBottom: 'none' }}>
-              Hardware Device Profile
-            </h3>
-            <div style={{ fontSize: '12px', color: '#718096', marginTop: '6px' }}>
-              These values are fetched by the ESP32 so the field team does not need
-              to reflash firmware when the distribution setup changes.
-            </div>
-          </div>
-          <button className="btn btn-primary btn-sm"
-            onClick={handleSaveHardwareProfile}
-            disabled={loading}>
-            {loading ? 'Saving...' : 'Save Device Profile'}
-          </button>
-        </div>
-
-        <div className="form-grid">
-          <div className="form-group">
-            <label>Aid Type *</label>
-            <select
-              value={hardwareProfile.aid_type}
-              style={inputStyle(hardwareErrors.aid_type)}
-              onChange={e => {
-                const selected = AID_TYPES.find(a => a.type === e.target.value);
-                setHardwareProfile({
-                  ...hardwareProfile,
-                  aid_type: e.target.value,
-                  aid_unit: selected?.unit || hardwareProfile.aid_unit
-                });
-                setHardwareErrors({ ...hardwareErrors, aid_type: '', aid_unit: '' });
-              }}>
-              {AID_TYPES.map(item => (
-                <option key={item.type} value={item.type}>{item.type}</option>
-              ))}
-            </select>
-            {hardwareErrors.aid_type && <div style={errStyle}>⚠ {hardwareErrors.aid_type}</div>}
-          </div>
-
-          <div className="form-group">
-            <label>Aid Unit *</label>
-            <input
-              value={hardwareProfile.aid_unit}
-              style={inputStyle(hardwareErrors.aid_unit)}
-              onChange={e => {
-                setHardwareProfile({ ...hardwareProfile, aid_unit: e.target.value.toUpperCase() });
-                setHardwareErrors({ ...hardwareErrors, aid_unit: '' });
-              }}/>
-            {hardwareErrors.aid_unit && <div style={errStyle}>⚠ {hardwareErrors.aid_unit}</div>}
-          </div>
-
-          <div className="form-group">
-            <label>Amount *</label>
-            <input
-              type="number"
-              value={hardwareProfile.amount}
-              style={inputStyle(hardwareErrors.amount)}
-              onChange={e => {
-                setHardwareProfile({ ...hardwareProfile, amount: e.target.value });
-                setHardwareErrors({ ...hardwareErrors, amount: '' });
-              }}/>
-            {hardwareErrors.amount && <div style={errStyle}>⚠ {hardwareErrors.amount}</div>}
-          </div>
-
-          <div className="form-group">
-            <label>Location *</label>
-            <input
-              value={hardwareProfile.location}
-              style={inputStyle(hardwareErrors.location)}
-              onChange={e => {
-                setHardwareProfile({ ...hardwareProfile, location: e.target.value });
-                setHardwareErrors({ ...hardwareErrors, location: '' });
-              }}/>
-            {hardwareErrors.location && <div style={errStyle}>⚠ {hardwareErrors.location}</div>}
-          </div>
-
-          <div className="form-group">
-            <label>Officer ID *</label>
-            <input
-              value={hardwareProfile.officer_id}
-              style={inputStyle(hardwareErrors.officer_id)}
-              onChange={e => {
-                setHardwareProfile({ ...hardwareProfile, officer_id: e.target.value });
-                setHardwareErrors({ ...hardwareErrors, officer_id: '' });
-              }}/>
-            {hardwareErrors.officer_id && <div style={errStyle}>⚠ {hardwareErrors.officer_id}</div>}
-          </div>
-
-          <div className="form-group">
-            <label>Device ID *</label>
-            <input
-              value={hardwareProfile.device_id}
-              style={inputStyle(hardwareErrors.device_id)}
-              onChange={e => {
-                setHardwareProfile({ ...hardwareProfile, device_id: e.target.value });
-                setHardwareErrors({ ...hardwareErrors, device_id: '' });
-              }}/>
-            {hardwareErrors.device_id && <div style={errStyle}>⚠ {hardwareErrors.device_id}</div>}
-          </div>
-        </div>
-
-        <div style={{
-          marginTop: '14px',
-          fontSize: '11px',
-          color: '#718096',
-          background: '#f7fafc',
-          border: '1px solid #e2e8f0',
-          borderRadius: '8px',
-          padding: '10px 12px'
-        }}>
-          Firmware now needs only WiFi credentials, Flask URL, and operator login credentials.
-          The active aid profile is pulled from the server automatically.
-        </div>
-      </div>
 
       <div className="card">
         <div style={{
@@ -821,6 +710,51 @@ const handleRegister = async () => {
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* ── Hardware Activity Log ── */}
+      <div className="card">
+        <div style={{
+          display: 'flex', justifyContent: 'space-between',
+          alignItems: 'center', marginBottom: '16px', gap: '12px',
+          flexWrap: 'wrap'
+        }}>
+          <div>
+            <h3 style={{ margin: 0, padding: 0, borderBottom: 'none' }}>
+              🔄 Hardware Activity Log
+            </h3>
+            <div style={{ fontSize: '12px', color: '#718096', marginTop: '6px' }}>
+              Live feed of ESP32 operations during enrollment and distribution.
+            </div>
+          </div>
+          <button className="btn btn-blue btn-sm" onClick={refreshData}>
+            Refresh
+          </button>
+        </div>
+
+        <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '8px' }}>
+          {hardwareEvents.length > 0 ? hardwareEvents.map((event, index) => (
+            <div key={index} style={{
+              padding: '8px',
+              marginBottom: '4px',
+              backgroundColor: event.event_type.includes('FAILED') ? '#fed7d7' :
+                               event.event_type.includes('SUCCESS') || event.event_type === 'BENEFICIARY_REGISTERED' ? '#c6f6d5' :
+                               '#e6fffa',
+              borderRadius: '4px',
+              fontSize: '14px'
+            }}>
+              <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                {event.timestamp} - {event.device_id}
+              </div>
+              <div>{event.message}</div>
+              {event.details && <div style={{ fontSize: '12px', color: '#718096', marginTop: '4px' }}>{event.details}</div>}
+            </div>
+          )) : (
+            <div style={{ textAlign: 'center', color: '#a0aec0', padding: '24px' }}>
+              No hardware activity yet
+            </div>
+          )}
         </div>
       </div>
 

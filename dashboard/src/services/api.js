@@ -117,3 +117,8 @@ export const getTotalTransactions = () =>
 
 // ── SMS ──────────────────────────────────────────────────────
 export const getSMSLog = () => api.get('/api/sms/log');
+
+
+// ── Hardware Events ──────────────────────────────────────────
+export const getHardwareEvents = (limit = 50) =>
+  api.get(`/api/hardware/events?limit=${limit}`);
