@@ -76,6 +76,9 @@ export const createCampaign = (data) => api.post('/api/campaign/create', data);
 export const getHardwareProfile = () => api.get('/api/hardware/profile');
 export const updateHardwareProfile = (data) => api.post('/api/hardware/profile', data);
 export const queueHardwareEnrollment = (data) => api.post('/api/hardware/enrollment/start', data);
+export const startFingerprintEnrollment = (data) => api.post('/api/fingerprint/start-enroll', data);
+export const getFingerprintEnrollmentStatus = (beneficiaryId) =>
+  api.get(`/api/fingerprint/status?beneficiary_id=${beneficiaryId}`);
 export const getEnrollmentRequests = () => api.get('/api/hardware/enrollment/list');
 export const getEnrollmentRequest = (id) => api.get(`/api/hardware/enrollment/${id}`);
 

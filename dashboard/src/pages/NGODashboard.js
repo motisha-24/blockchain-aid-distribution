@@ -4,7 +4,7 @@
 //  Author: Motisha John Mafukashe — R2211825P
 // ================================================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import DashboardHero from '../components/DashboardHero';
 import StatCard from '../components/StatCard';
 import {
@@ -16,7 +16,8 @@ import {
   getDistributionHistory, getCampaigns,
   getHardwareProfile, updateHardwareProfile,
   queueHardwareEnrollment, getEnrollmentRequests,
-  getHardwareEvents
+  getHardwareEvents, startFingerprintEnrollment,
+  getFingerprintEnrollmentStatus
 } from '../services/api';
 
 const AID_TYPES = [
@@ -46,6 +47,11 @@ export default function NGODashboard() {
   });
   const [hardwareErrors, setHardwareErrors] = useState({});
   const [hardwareEvents, setHardwareEvents] = useState([]);
+  const [fingerprintStatus, setFingerprintStatus] = useState(null); // null, 'waiting', 'success', 'failed'
+  const [currentEnrollmentId, setCurrentEnrollmentId] = useState(null);
+  const [statusMessage, setStatusMessage] = useState('');
+  const fingerprintPollRef = useRef(null);
+  const fingerprintTimeoutRef = useRef(null);
 
   // ── Registration form ──────────────────────────────────────
   const [regForm, setRegForm] = useState({
@@ -105,6 +111,15 @@ export default function NGODashboard() {
     return () => clearInterval(interval);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => () => {
+    if (fingerprintPollRef.current) {
+      clearInterval(fingerprintPollRef.current);
+    }
+    if (fingerprintTimeoutRef.current) {
+      clearTimeout(fingerprintTimeoutRef.current);
+    }
+  }, []);
+
   const refreshData = async () => {
     try {
       const [s, p, c, h, e, he] = await Promise.allSettled([
@@ -128,6 +143,21 @@ export default function NGODashboard() {
   const showAlert = (msg, type = 'success') => {
     setAlert({ msg, type });
     setTimeout(() => setAlert(null), 5000);
+  };
+
+  const resetFingerprintWorkflow = (finalStatus = null) => {
+    if (fingerprintPollRef.current) {
+      clearInterval(fingerprintPollRef.current);
+      fingerprintPollRef.current = null;
+    }
+    if (fingerprintTimeoutRef.current) {
+      clearTimeout(fingerprintTimeoutRef.current);
+      fingerprintTimeoutRef.current = null;
+    }
+
+    setFingerprintStatus(finalStatus);
+    setCurrentEnrollmentId(null);
+    setStatusMessage('');
   };
 
   // ── Aid type change ────────────────────────────────────────
@@ -350,6 +380,7 @@ const handleRegister = async () => {
     // Safe to continue when the beneficiary does not yet exist on-chain.
   }
 
+  resetFingerprintWorkflow(null);
   setLoading(true);
   try {
     await queueHardwareEnrollment({
@@ -361,17 +392,102 @@ const handleRegister = async () => {
       officer_id: hardwareProfile.officer_id,
       device_id: hardwareProfile.device_id
     });
+    setCurrentEnrollmentId(parseInt(regForm.id, 10));
+    setFingerprintStatus('ready');
+    setStatusMessage('');
     showAlert(
-      `Queued ${regForm.name} for fingerprint enrollment on ${hardwareProfile.device_id}`
+      `Details saved. Click "Submit Fingerprint" to start enrollment on ${hardwareProfile.device_id}`
     );
-    setRegForm({ id:'', name:'', national_id:'', phone:'', location:'' });
-    setRegErrors({});
-    refreshData();
   } catch (e) {
     showAlert(
       e.response?.data?.message ||
       e.response?.data?.error ||
       'Enrollment queueing failed',
+      'error'
+    );
+  }
+  setLoading(false);
+};
+
+//  SUBMIT FINGERPRINT
+// ================================================================
+//  SUBMIT FINGERPRINT
+// ================================================================
+const handleSubmitFingerprint = async () => {
+  if (!currentEnrollmentId) return;
+
+  setFingerprintStatus('waiting');
+  setStatusMessage('Starting fingerprint capture...');
+  setLoading(true);
+
+  try {
+    await startFingerprintEnrollment({
+      beneficiary_id: currentEnrollmentId,
+      device_id: hardwareProfile.device_id
+    });
+
+    showAlert('Beneficiary enter fingerprint on the ESP32 sensor (will be scanned twice for verification).');
+
+    if (fingerprintPollRef.current) {
+      clearInterval(fingerprintPollRef.current);
+    }
+    if (fingerprintTimeoutRef.current) {
+      clearTimeout(fingerprintTimeoutRef.current);
+    }
+
+    fingerprintPollRef.current = setInterval(async () => {
+      try {
+        const response = await getFingerprintEnrollmentStatus(currentEnrollmentId);
+        const data = response.data;
+
+        if (data.success && data.status) {
+          const nextStatus = data.status.status_code;
+          const nextMessage = data.status.status_message;
+
+          setStatusMessage(nextMessage);
+
+          if (nextStatus === 'ACTIVE') {
+            resetFingerprintWorkflow('success');
+            showAlert('Fingerprint enrolled and beneficiary registered on blockchain!');
+            setRegForm({ id:'', name:'', national_id:'', phone:'', location:'' });
+            setRegErrors({});
+            refreshData();
+            return;
+          }
+
+          if (nextStatus === 'FAILED_ENROLLMENT' || nextStatus === 'FAILED_BLOCKCHAIN') {
+            resetFingerprintWorkflow('failed');
+            showAlert(`Enrollment failed: ${nextMessage}`, 'error');
+            refreshData();
+          }
+        }
+      } catch (e) {
+        console.error('Error polling status:', e);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    fingerprintTimeoutRef.current = setTimeout(() => {
+      if (fingerprintPollRef.current) {
+        clearInterval(fingerprintPollRef.current);
+        fingerprintPollRef.current = null;
+      }
+      setFingerprintStatus(prev => {
+        if (prev === 'waiting') {
+          setCurrentEnrollmentId(null);
+          setStatusMessage('');
+          showAlert('Fingerprint enrollment timed out', 'error');
+          return 'failed';
+        }
+        return prev;
+      });
+    }, 120000);
+
+  } catch (e) {
+    resetFingerprintWorkflow('failed');
+    showAlert(
+      e.response?.data?.message ||
+      e.response?.data?.error ||
+      'Failed to start fingerprint enrollment',
       'error'
     );
   }
@@ -618,7 +734,14 @@ const handleRegister = async () => {
       {/* ── Alert ── */}
       {alert && (
         <div className={`alert alert-${alert.type}`}
-          style={{ marginTop: '16px' }}>
+          style={{
+            position: 'fixed',
+            top: '20px',
+            right: '20px',
+            zIndex: 1000,
+            maxWidth: '400px',
+            boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
+          }}>
           {alert.msg}
         </div>
       )}
@@ -872,14 +995,60 @@ const handleRegister = async () => {
         </div>
         <div style={{
           display: 'flex', alignItems: 'center',
-          gap: '12px', marginTop: '4px'
+          gap: '12px', marginTop: '4px', flexWrap: 'wrap'
         }}>
-          <button className="btn btn-primary"
-            onClick={handleRegister} disabled={loading}>
-            {loading ? 'Queueing...' : '+ Queue Enrollment on Hardware'}
-          </button>
+          {!currentEnrollmentId && (
+            <button className="btn btn-primary"
+              onClick={handleRegister} disabled={loading}>
+              {loading ? 'Saving...' : '+ Save Details & Prepare Fingerprint'}
+            </button>
+          )}
+
+          {fingerprintStatus === 'ready' && (
+            <button className="btn btn-success"
+              onClick={handleSubmitFingerprint} disabled={loading}>
+              {loading ? 'Starting...' : '🖐️ Submit Fingerprint'}
+            </button>
+          )}
+
+          {fingerprintStatus === 'waiting' && (
+            <div style={{
+              padding: '12px 16px',
+              backgroundColor: '#e6fffa',
+              border: '1px solid #b2f5ea',
+              borderRadius: '6px',
+              color: '#234e52'
+            }}>
+              ⏳ {statusMessage || 'ESP32 is waiting for fingerprint input... Place finger on sensor.'}
+            </div>
+          )}
+
+          {fingerprintStatus === 'success' && (
+            <div style={{
+              padding: '12px 16px',
+              backgroundColor: '#c6f6d5',
+              border: '1px solid #9ae6b4',
+              borderRadius: '6px',
+              color: '#22543d'
+            }}>
+              ✅ Fingerprint enrolled and beneficiary registered on blockchain!
+            </div>
+          )}
+
+          {fingerprintStatus === 'failed' && (
+            <div style={{
+              padding: '12px 16px',
+              backgroundColor: '#fed7d7',
+              border: '1px solid #feb2b2',
+              borderRadius: '6px',
+              color: '#742a2a'
+            }}>
+              ❌ Fingerprint enrollment failed. Please try again.
+            </div>
+          )}
+
           <span style={{ fontSize: '11px', color: '#a0aec0' }}>
-            * Hardware enrollment completes first, then blockchain registration is finalised
+            * Enter details first, then submit fingerprint for immediate enrollment
           </span>
         </div>
       </div>

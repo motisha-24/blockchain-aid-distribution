@@ -39,8 +39,10 @@ def verify_password(password: str, stored_hash: str) -> bool:
 
 # ── Get database connection ───────────────────────────────────
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row  # allows dict-like access
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
@@ -117,6 +119,26 @@ def init_database():
             details     TEXT    DEFAULT ''
         )
     """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS enrollment_status_updates (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            beneficiary_id   INTEGER NOT NULL,
+            device_id        TEXT    NOT NULL,
+            status_code      TEXT    NOT NULL,
+            status_message   TEXT    NOT NULL,
+            created_at       TEXT    NOT NULL
+        )
+    """)
+
+    # Patch older database schema if the hardware_events table was created before officer_id/timestamp/details existed
+    existing_columns = {row[1] for row in cursor.execute("PRAGMA table_info(hardware_events)")}
+    if 'officer_id' not in existing_columns:
+        cursor.execute("ALTER TABLE hardware_events ADD COLUMN officer_id TEXT NOT NULL DEFAULT ''")
+    if 'timestamp' not in existing_columns:
+        cursor.execute("ALTER TABLE hardware_events ADD COLUMN timestamp TEXT NOT NULL DEFAULT ''")
+    if 'details' not in existing_columns:
+        cursor.execute("ALTER TABLE hardware_events ADD COLUMN details TEXT DEFAULT ''")
 
     conn.commit()
 
@@ -329,12 +351,15 @@ VALID_AID_UNITS = [
 
 VALID_ENROLLMENT_STATUSES = {
     "PENDING_ENROLLMENT",
+    "WAITING_FOR_FINGERPRINT",
     "ENROLLING",
     "ENROLLED",
     "ACTIVE",
     "FAILED_ENROLLMENT",
     "FAILED_BLOCKCHAIN"
 }
+
+ENROLLMENT_RETRY_AFTER_SECONDS = 120
 
 
 def create_campaign(name, donor_label, aid_type, budget_total):
@@ -549,6 +574,10 @@ def queue_beneficiary_enrollment(beneficiary_id, name, national_id, phone,
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
+        DELETE FROM enrollment_status_updates
+        WHERE beneficiary_id = ?
+    """, (beneficiary_id,))
+    cursor.execute("""
         INSERT INTO beneficiary_enrollment_queue
         (beneficiary_id, slot_id, name, national_id, phone, location,
          officer_id, device_id, status, error_message, blockchain_tx,
@@ -607,13 +636,20 @@ def list_enrollment_requests():
 def get_next_pending_enrollment(device_id):
     conn = get_connection()
     cursor = conn.cursor()
+    stale_before = (
+        datetime.datetime.now() -
+        datetime.timedelta(seconds=ENROLLMENT_RETRY_AFTER_SECONDS)
+    ).strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute("""
         SELECT * FROM beneficiary_enrollment_queue
         WHERE device_id = ?
-          AND status IN ('PENDING_ENROLLMENT', 'FAILED_ENROLLMENT')
+          AND (
+                status IN ('WAITING_FOR_FINGERPRINT', 'FAILED_ENROLLMENT')
+                OR (status = 'ENROLLING' AND updated_at <= ?)
+          )
         ORDER BY created_at ASC, beneficiary_id ASC
         LIMIT 1
-    """, (device_id.strip(),))
+    """, (device_id.strip(), stale_before))
     row = cursor.fetchone()
 
     if not row:
@@ -621,12 +657,16 @@ def get_next_pending_enrollment(device_id):
         return {"success": False, "error": "No pending enrollment job"}
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    error_message = ""
+    if row["status"] == "ENROLLING":
+        error_message = "Previous enrollment attempt timed out. Retrying."
     cursor.execute("""
         UPDATE beneficiary_enrollment_queue
         SET status = 'ENROLLING',
+            error_message = ?,
             updated_at = ?
         WHERE beneficiary_id = ?
-    """, (now, row["beneficiary_id"]))
+    """, (error_message, now, row["beneficiary_id"]))
     conn.commit()
     conn.close()
     return get_enrollment_request(row["beneficiary_id"])
@@ -656,6 +696,54 @@ def update_enrollment_status(beneficiary_id, status, error_message="",
         return {"success": False, "error": "Enrollment request not found"}
 
     return get_enrollment_request(beneficiary_id)
+
+
+def log_enrollment_status(beneficiary_id, device_id, status_code, status_message):
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO enrollment_status_updates
+        (beneficiary_id, device_id, status_code, status_message, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        int(beneficiary_id),
+        device_id.strip(),
+        status_code.strip(),
+        status_message.strip(),
+        now
+    ))
+    conn.commit()
+    conn.close()
+    return {
+        "success": True,
+        "status": {
+            "beneficiary_id": int(beneficiary_id),
+            "device_id": device_id.strip(),
+            "status_code": status_code.strip(),
+            "status_message": status_message.strip(),
+            "created_at": now
+        }
+    }
+
+
+def get_latest_enrollment_status(beneficiary_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT beneficiary_id, device_id, status_code, status_message, created_at
+        FROM enrollment_status_updates
+        WHERE beneficiary_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+    """, (int(beneficiary_id),))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return {"success": False, "error": "No status available for this beneficiary"}
+
+    return {"success": True, "status": dict(row)}
 
 # ── Reactivate user account ───────────────────────────────────
 def reactivate_user(username):
@@ -689,11 +777,11 @@ def log_hardware_event(event_type, message, device_id, officer_id, details=""):
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO hardware_events
-        (event_type, message, device_id, officer_id, timestamp, details)
-        VALUES (?, ?, ?, ?, ?, ?)
+        (event_type, message, device_id, officer_id, created_at, timestamp, details)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
         event_type.strip(), message.strip(), device_id.strip(),
-        officer_id.strip(), now, details.strip()
+        officer_id.strip(), now, now, details.strip()
     ))
     conn.commit()
     conn.close()
