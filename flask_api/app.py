@@ -64,6 +64,8 @@ from database import (
     list_enrollment_requests,
     get_next_pending_enrollment,
     update_enrollment_status,
+    log_enrollment_status,
+    get_latest_enrollment_status,
     log_hardware_event,
     get_recent_hardware_events
 )
@@ -207,6 +209,27 @@ def hardware_response(success: bool, action: str, message: str, **extra):
     return payload
 
 
+def build_enrollment_status_payload(request_data):
+    status = request_data.get("status", "")
+    status_messages = {
+        "PENDING_ENROLLMENT": "Beneficiary details saved. Ready to start fingerprint capture.",
+        "WAITING_FOR_FINGERPRINT": "Please place finger on sensor",
+        "ENROLLING": "Fingerprint capture in progress",
+        "ENROLLED": "Fingerprint captured successfully",
+        "ACTIVE": "Beneficiary registered",
+        "FAILED_ENROLLMENT": request_data.get("error_message") or "Fingerprint enrollment failed",
+        "FAILED_BLOCKCHAIN": request_data.get("error_message") or "Blockchain registration failed"
+    }
+
+    return {
+        "beneficiary_id": request_data.get("beneficiary_id"),
+        "device_id": request_data.get("device_id", ""),
+        "status_code": status,
+        "status_message": status_messages.get(status, "Enrollment status updated"),
+        "created_at": request_data.get("updated_at", "")
+    }
+
+
 # ================================================================
 #  VALIDATION HELPER
 # ================================================================
@@ -322,7 +345,6 @@ def login():
 
 
 @app.route("/api/hardware/login", methods=["POST"])
-@limiter.limit("10/minute")
 def hardware_login():
     data = request.get_json() or {}
     username = data.get("username", "").strip()
@@ -1269,6 +1291,81 @@ def start_hardware_enrollment():
     )), 201
 
 
+@app.route("/api/fingerprint/start-enroll", methods=["POST"])
+@app.route("/api/hardware/enrollment/start-fingerprint", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def start_fingerprint_enrollment():
+    data = request.get_json() or {}
+    errors = validate(data, {
+        "beneficiary_id": {"required": True, "type": "int", "min": 1001, "max": 1127},
+        "device_id": {"required": True, "type": "str", "min": 3, "max": 100}
+    })
+
+    if errors:
+        return jsonify(hardware_response(
+            False,
+            "FINGERPRINT_START_INVALID",
+            " | ".join(errors)
+        )), 400
+
+    beneficiary_id = int(data["beneficiary_id"])
+    device_id = data["device_id"].strip()
+
+    # Get the enrollment request
+    request_result = get_enrollment_request(beneficiary_id)
+    if not request_result["success"]:
+        return jsonify(hardware_response(
+            False,
+            "ENROLLMENT_NOT_FOUND",
+            request_result["error"]
+        )), 404
+
+    request_data = request_result["request"]
+    if request_data["device_id"] != device_id:
+        return jsonify(hardware_response(
+            False,
+            "DEVICE_MISMATCH",
+            "Enrollment request is for a different device"
+        )), 409
+
+    if request_data["status"] != "PENDING_ENROLLMENT":
+        return jsonify(hardware_response(
+            False,
+            "INVALID_STATUS",
+            f"Enrollment status is {request_data['status']}, expected PENDING_ENROLLMENT"
+        )), 409
+
+    # Update status to waiting for fingerprint
+    update_result = update_enrollment_status(beneficiary_id, "WAITING_FOR_FINGERPRINT")
+    if not update_result["success"]:
+        return jsonify(hardware_response(
+            False,
+            "STATUS_UPDATE_FAILED",
+            update_result["error"]
+        )), 500
+
+    log_enrollment_status(
+        beneficiary_id,
+        device_id,
+        "WAITING_FOR_FINGERPRINT",
+        "Please place finger on sensor"
+    )
+
+    log_hardware_event(
+        "FINGERPRINT_WAITING",
+        f"Waiting for fingerprint input for beneficiary {beneficiary_id}",
+        device_id,
+        request_data["officer_id"]
+    )
+
+    return jsonify(hardware_response(
+        True,
+        "FINGERPRINT_WAITING",
+        "ESP32 is now waiting for fingerprint input",
+        request=update_result["request"]
+    )), 200
+
+
 @app.route("/api/hardware/enrollment/list", methods=["GET"])
 @require_auth(["ADMIN", "NGO"])
 def enrollment_request_list():
@@ -1364,6 +1461,12 @@ def enrollment_result():
             "FAILED_ENROLLMENT",
             f"Slot mismatch. Expected {expected_slot}, got {slot_id}"
         )
+        log_enrollment_status(
+            beneficiary_id,
+            data["device_id"].strip(),
+            "FAILED_ENROLLMENT",
+            f"Slot mismatch. Expected {expected_slot}, got {slot_id}"
+        )
         log_hardware_event(
             "ENROLLMENT_FAILED",
             f"Slot mismatch for beneficiary {beneficiary_id}",
@@ -1384,6 +1487,12 @@ def enrollment_result():
             "FAILED_ENROLLMENT",
             error_message
         )
+        log_enrollment_status(
+            beneficiary_id,
+            data["device_id"].strip(),
+            "FAILED_ENROLLMENT",
+            error_message
+        )
         log_hardware_event(
             "ENROLLMENT_FAILED",
             f"Fingerprint enrollment failed for beneficiary {beneficiary_id}",
@@ -1398,6 +1507,12 @@ def enrollment_result():
         )), 200
 
     update_enrollment_status(beneficiary_id, "ENROLLED")
+    log_enrollment_status(
+        beneficiary_id,
+        data["device_id"].strip(),
+        "ENROLLED",
+        "Fingerprint captured successfully"
+    )
     log_hardware_event(
         "ENROLLMENT_SUCCESS",
         f"Fingerprint enrolled for beneficiary {beneficiary_id} in slot {slot_id}",
@@ -1415,6 +1530,12 @@ def enrollment_result():
     if not registration["success"]:
         update_enrollment_status(
             beneficiary_id,
+            "FAILED_BLOCKCHAIN",
+            registration.get("error", "Blockchain registration failed")
+        )
+        log_enrollment_status(
+            beneficiary_id,
+            data["device_id"].strip(),
             "FAILED_BLOCKCHAIN",
             registration.get("error", "Blockchain registration failed")
         )
@@ -1436,6 +1557,12 @@ def enrollment_result():
         "ACTIVE",
         blockchain_tx=registration.get("tx_hash", "")
     )
+    log_enrollment_status(
+        beneficiary_id,
+        data["device_id"].strip(),
+        "ACTIVE",
+        "Beneficiary registered"
+    )
     log_hardware_event(
         "BENEFICIARY_REGISTERED",
         f"Beneficiary {beneficiary_id} fully registered on blockchain",
@@ -1450,6 +1577,87 @@ def enrollment_result():
         request=final_status.get("request"),
         tx_hash=registration.get("tx_hash"),
         block=registration.get("block")
+    )), 200
+
+
+@app.route("/api/fingerprint/status", methods=["POST"])
+@app.route("/api/hardware/enrollment/status", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def update_enrollment_status_message():
+    data = request.get_json() or {}
+    errors = validate(data, {
+        "beneficiary_id": {"required": True, "type": "int", "min": 1001, "max": 1127},
+        "device_id": {"required": True, "type": "str", "min": 3, "max": 100},
+        "status_message": {"required": True, "type": "str", "min": 1, "max": 200}
+    })
+
+    if errors:
+        return jsonify(hardware_response(
+            False,
+            "STATUS_UPDATE_INVALID",
+            " | ".join(errors)
+        )), 400
+
+    beneficiary_id = int(data["beneficiary_id"])
+    device_id = data["device_id"].strip()
+    status_code = str(data.get("status_code", "ENROLLING")).strip().upper() or "ENROLLING"
+    status_message = data["status_message"].strip()
+
+    log_result = log_enrollment_status(
+        beneficiary_id,
+        device_id,
+        status_code,
+        status_message
+    )
+
+    return jsonify(hardware_response(
+        True,
+        "STATUS_UPDATED",
+        "Enrollment status updated",
+        beneficiary_id=beneficiary_id,
+        status=log_result["status"]
+    )), 200
+
+
+@app.route("/api/fingerprint/status", methods=["GET"])
+@app.route("/api/hardware/enrollment/status", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def get_enrollment_status_message():
+    beneficiary_id_str = request.args.get("beneficiary_id", "").strip()
+    if not beneficiary_id_str:
+        return jsonify(hardware_response(
+            False,
+            "BENEFICIARY_ID_REQUIRED",
+            "beneficiary_id query parameter is required"
+        )), 400
+
+    try:
+        beneficiary_id = int(beneficiary_id_str)
+    except ValueError:
+        return jsonify(hardware_response(
+            False,
+            "INVALID_BENEFICIARY_ID",
+            "beneficiary_id must be an integer"
+        )), 400
+
+    status_result = get_latest_enrollment_status(beneficiary_id)
+    if status_result["success"]:
+        status_data = status_result["status"]
+    else:
+        request_result = get_enrollment_request(beneficiary_id)
+        if not request_result["success"]:
+            return jsonify(hardware_response(
+                False,
+                "STATUS_NOT_FOUND",
+                "No status available for this beneficiary"
+            )), 404
+        status_data = build_enrollment_status_payload(request_result["request"])
+
+    return jsonify(hardware_response(
+        True,
+        "STATUS_RETRIEVED",
+        "Enrollment status retrieved",
+        status=status_data
     )), 200
 
 
@@ -1595,4 +1803,4 @@ if __name__ == "__main__":
     print("  Author : Motisha John Mafukashe R2211825P")
     print("  Server : http://127.0.0.1:5000")
     print("=" * 55)
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=False, host="0.0.0.0", port=5000, threaded=True)

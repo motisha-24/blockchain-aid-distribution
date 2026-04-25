@@ -25,17 +25,25 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
+// Forward declarations
+bool enrollFingerprintToSlot(int slot, int beneficiaryId = 0);
+
 // ----------------------------------------------------------------
 // Config - update these before uploading
 // ----------------------------------------------------------------
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
-const char* API_BASE_URL = "http://192.168.1.100:5000";
+const char* WIFI_SSID = "Mataruse";
+const char* WIFI_PASSWORD = "Pipilo##2018";
+const char* API_BASE_URL = "http://192.168.1.240:5000";
 const char* HARDWARE_USERNAME = "ngo_officer";
 const char* HARDWARE_PASSWORD = "ngo2024";
 String JWT_TOKEN = "";
 
-String DEVICE_ID = "aidchain-field-01";
+// Change this before uploading
+// "REGISTER" = registration mode
+// "DISTRIBUTE" = distribution mode
+#define SYSTEM_MODE "REGISTER"
+
+String DEVICE_ID = (SYSTEM_MODE == "REGISTER") ? "aidchain-registration-01" : "aidchain-distribution-01";
 String OFFICER_ID = "ngo_officer";
 
 String ACTIVE_AID_TYPE = "MAIZE";
@@ -66,6 +74,9 @@ constexpr unsigned long WIFI_RECONNECT_MS = 10000;
 constexpr unsigned long MAIN_LOOP_DELAY_MS = 120;
 constexpr unsigned long FINGER_COOLDOWN_MS = 1600;
 constexpr unsigned long ENROLLMENT_POLL_MS = 5000;
+constexpr unsigned long ENROLLMENT_FIRST_SCAN_TIMEOUT_MS = 20000;
+constexpr unsigned long ENROLLMENT_REMOVE_FINGER_TIMEOUT_MS = 10000;
+constexpr unsigned long ENROLLMENT_SECOND_SCAN_TIMEOUT_MS = 20000;
 
 HardwareSerial FingerSerial(2);
 HardwareSerial GsmSerial(1);
@@ -76,6 +87,12 @@ int attemptCount = 0;
 unsigned long lastWifiReconnectMs = 0;
 unsigned long lastFingerHandledMs = 0;
 unsigned long lastEnrollmentPollMs = 0;
+unsigned long lastWifiStatusPrintMs = 0;
+
+bool immediateFingerprintMode = false;
+int immediateBeneficiaryId = 0;
+int immediateSlotId = 0;
+unsigned long greenLedOnUntilMs = 0;
 
 struct BeneficiaryInfo {
   bool success = false;
@@ -139,7 +156,9 @@ void signalSuccess() {
 }
 
 void signalFailure() {
-  blinkLed(RED_LED_PIN, 2, 160, 110);
+  setRed(true);
+  delay(1000); // Red LED on for 1 second
+  setRed(false);
 }
 
 void signalDuplicate() {
@@ -203,7 +222,8 @@ void connectWifiBlocking() {
 }
 
 void ensureWifi() {
-  if (WiFi.status() == WL_CONNECTED) return;
+  wl_status_t status = WiFi.status();
+  if (status == WL_CONNECTED) return;
 
   unsigned long now = millis();
   if (now - lastWifiReconnectMs < WIFI_RECONNECT_MS) return;
@@ -212,6 +232,51 @@ void ensureWifi() {
   Serial.println("[WIFI] Connection lost. Attempting reconnection...");
   WiFi.disconnect();
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  // Wait a bit and check if connected
+  delay(2000);
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("[WIFI] Reconnected successfully.");
+    Serial.printf("[WIFI] IP: %s\n", WiFi.localIP().toString().c_str());
+  } else {
+    Serial.println("[WIFI] Reconnection failed.");
+  }
+}
+
+void monitorWifiStatus() {
+  unsigned long now = millis();
+  if (now - lastWifiStatusPrintMs < 30000) return; // Print every 30 seconds
+
+  lastWifiStatusPrintMs = now;
+  wl_status_t status = WiFi.status();
+  String statusMsg;
+  switch (status) {
+    case WL_CONNECTED:
+      statusMsg = "CONNECTED";
+      break;
+    case WL_DISCONNECTED:
+      statusMsg = "DISCONNECTED";
+      break;
+    case WL_IDLE_STATUS:
+      statusMsg = "IDLE";
+      break;
+    case WL_NO_SSID_AVAIL:
+      statusMsg = "NO_SSID_AVAIL";
+      break;
+    case WL_CONNECT_FAILED:
+      statusMsg = "CONNECT_FAILED";
+      break;
+    case WL_CONNECTION_LOST:
+      statusMsg = "CONNECTION_LOST";
+      break;
+    default:
+      statusMsg = "UNKNOWN";
+      break;
+  }
+  Serial.printf("[WIFI] Status: %s\n", statusMsg.c_str());
+  if (status == WL_CONNECTED) {
+    Serial.printf("[WIFI] IP: %s\n", WiFi.localIP().toString().c_str());
+  }
 }
 
 // ----------------------------------------------------------------
@@ -356,7 +421,8 @@ bool refreshJwtToken() {
   Serial.printf("[AUTH] Refresh status: %d\n", status);
   if (status != 200) {
     Serial.printf("[AUTH] Refresh failed: %s\n", body.c_str());
-    return false;
+    // Try to login again if refresh failed
+    return hardwareLogin();
   }
 
   DynamicJsonDocument doc(512);
@@ -375,6 +441,42 @@ bool refreshJwtToken() {
   JWT_TOKEN = String(token);
   Serial.println("[AUTH] JWT token refreshed in device memory.");
   return true;
+}
+
+// ----------------------------------------------------------------
+// Enrollment status helpers
+// ----------------------------------------------------------------
+void sendEnrollmentStatus(int beneficiaryId, const String& statusCode, const String& message) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[STATUS] Cannot send status while offline.");
+    return;
+  }
+
+  HTTPClient http;
+  http.begin(endpointUrl("/api/fingerprint/status"));
+  if (!addJsonHeaders(http)) {
+    http.end();
+    return;
+  }
+
+  DynamicJsonDocument doc(320);
+  doc["beneficiary_id"] = beneficiaryId;
+  doc["device_id"] = DEVICE_ID;
+  doc["status_code"] = statusCode;
+  doc["status_message"] = message;
+
+  String body;
+  serializeJson(doc, body);
+
+  int status = http.POST(body);
+  String response = http.getString();
+  http.end();
+
+  Serial.printf("[STATUS] Sent [%s] '%s' -> %d\n", statusCode.c_str(), message.c_str(), status);
+}
+
+void sendEnrollmentStatus(int beneficiaryId, const String& message) {
+  sendEnrollmentStatus(beneficiaryId, "ENROLLING", message);
 }
 
 bool fetchHardwareProfile() {
@@ -453,12 +555,17 @@ EnrollmentJob fetchNextEnrollmentJob() {
   String body = http.getString();
   http.end();
 
+  Serial.printf("[ENROLLMENT] Next job HTTP %d\n", status);
+
   if (status == 401) {
     if (refreshJwtToken()) return fetchNextEnrollmentJob();
     return job;
   }
 
   if (status != 200) {
+    if (body.length() > 0) {
+      Serial.printf("[ENROLLMENT] No job body: %s\n", body.c_str());
+    }
     return job;
   }
 
@@ -466,11 +573,15 @@ EnrollmentJob fetchNextEnrollmentJob() {
   DeserializationError err = deserializeJson(doc, body);
   if (err) {
     Serial.printf("[ENROLLMENT] Job parse failed: %s\n", err.c_str());
+    Serial.printf("[ENROLLMENT] Raw body: %s\n", body.c_str());
     return job;
   }
 
   JsonObject request = doc["request"];
-  if (request.isNull()) return job;
+  if (request.isNull()) {
+    Serial.printf("[ENROLLMENT] Response missing request payload: %s\n", body.c_str());
+    return job;
+  }
 
   job.available = true;
   job.beneficiaryId = request["beneficiary_id"] | 0;
@@ -478,6 +589,8 @@ EnrollmentJob fetchNextEnrollmentJob() {
   job.name = String((const char*)(request["name"] | ""));
   job.location = String((const char*)(request["location"] | ""));
   job.deviceId = String((const char*)(request["device_id"] | ""));
+  Serial.printf("[ENROLLMENT] Next job beneficiary=%d slot=%d device=%s\n",
+                job.beneficiaryId, job.slotId, job.deviceId.c_str());
   return job;
 }
 
@@ -511,6 +624,87 @@ void reportEnrollmentResult(int beneficiaryId, int slotId, bool success,
   http.end();
 
   Serial.printf("[ENROLLMENT] Result HTTP %d -> %s\n", status, response.c_str());
+}
+
+void processImmediateFingerprintJob() {
+  Serial.println("[IMMEDIATE] Starting immediate fingerprint enrollment...");
+
+  bool success = enrollFingerprintToSlot(immediateSlotId, immediateBeneficiaryId);
+  reportEnrollmentResult(
+    immediateBeneficiaryId,
+    immediateSlotId,
+    success,
+    success ? "" : "AS608 immediate enrollment failed on device"
+  );
+
+  if (success) {
+    setGreen(true);
+    greenLedOnUntilMs = millis() + 5000; // Keep green LED on for 5 seconds
+    Serial.println("[IMMEDIATE] Immediate enrollment completed successfully!");
+  } else {
+    setRed(true);
+    delay(1000); // Red LED on for 1 second
+    setRed(false);
+    Serial.println("[IMMEDIATE] Immediate enrollment failed!");
+  }
+
+  // Reset immediate mode
+  immediateFingerprintMode = false;
+  immediateBeneficiaryId = 0;
+  immediateSlotId = 0;
+  lastFingerHandledMs = millis();
+}
+
+bool checkForImmediateFingerprintJob() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  HTTPClient http;
+  String url = endpointUrl(("/api/hardware/enrollment/next?device_id=" + DEVICE_ID).c_str());
+  http.begin(url);
+  if (!addJsonHeaders(http)) {
+    http.end();
+    return false;
+  }
+
+  int status = http.GET();
+  String body = http.getString();
+  http.end();
+
+  if (status == 401) {
+    if (refreshJwtToken()) return checkForImmediateFingerprintJob();
+    return false;
+  }
+
+  if (status != 200) {
+    return false;
+  }
+
+  DynamicJsonDocument doc(1536);
+  DeserializationError err = deserializeJson(doc, body);
+  if (err) {
+    Serial.printf("[IMMEDIATE] Job parse failed: %s\n", err.c_str());
+    return false;
+  }
+
+  JsonObject request = doc["request"];
+  if (request.isNull()) return false;
+
+  String statusStr = String((const char*)(request["status"] | ""));
+  if (statusStr != "WAITING_FOR_FINGERPRINT") return false;
+
+  immediateBeneficiaryId = request["beneficiary_id"] | 0;
+  immediateSlotId = request["slot_id"] | 0;
+
+  Serial.println();
+  Serial.println("[IMMEDIATE] ====================================");
+  Serial.printf("[IMMEDIATE] IMMEDIATE fingerprint job found!\n");
+  Serial.printf("[IMMEDIATE] Beneficiary: %d\n", immediateBeneficiaryId);
+  Serial.printf("[IMMEDIATE] Slot       : %d\n", immediateSlotId);
+  Serial.println("[IMMEDIATE] Waiting for fingerprint input...");
+  Serial.println("[IMMEDIATE] ====================================");
+
+  immediateFingerprintMode = true;
+  return true;
 }
 
 bool hardwarePing() {
@@ -826,7 +1020,18 @@ bool waitForFingerImage(uint8_t expectedState) {
   return false;
 }
 
-bool enrollFingerprintToSlot(int slot) {
+bool waitForFingerprintState(uint8_t expectedState, unsigned long timeoutMs) {
+  unsigned long start = millis();
+  while (millis() - start < timeoutMs) {
+    if (finger.getImage() == expectedState) {
+      return true;
+    }
+    delay(40);
+  }
+  return false;
+}
+
+bool enrollFingerprintToSlot(int slot, int beneficiaryId) {
   if (slot <= 0 || slot > 127) {
     Serial.println("[ENROLL] Invalid slot. Use 1-127.");
     return false;
@@ -834,33 +1039,52 @@ bool enrollFingerprintToSlot(int slot) {
 
   Serial.printf("[ENROLL] Starting enrollment for slot %d\n", slot);
   Serial.println("[ENROLL] Place finger on sensor.");
-  while (finger.getImage() != FINGERPRINT_OK) {
-    delay(40);
+  if (beneficiaryId > 0) {
+    sendEnrollmentStatus(beneficiaryId, "PLACE_FINGER", "Please place finger on sensor");
+  }
+  if (!waitForFingerprintState(FINGERPRINT_OK, ENROLLMENT_FIRST_SCAN_TIMEOUT_MS)) {
+    Serial.println("[ENROLL] Timed out waiting for first finger placement.");
+    if (beneficiaryId > 0) {
+      sendEnrollmentStatus(beneficiaryId, "FAILED_ENROLLMENT", "Timed out waiting for first finger placement");
+    }
+    return false;
   }
 
   if (finger.image2Tz(1) != FINGERPRINT_OK) {
     Serial.println("[ENROLL] First image conversion failed.");
+    if (beneficiaryId > 0) sendEnrollmentStatus(beneficiaryId, "FAILED_ENROLLMENT", "First scan failed - try again");
     return false;
   }
 
+  if (beneficiaryId > 0) sendEnrollmentStatus(beneficiaryId, "Good — remove finger");
   Serial.println("[ENROLL] Remove finger.");
-  delay(2000);
-  while (finger.getImage() != FINGERPRINT_NOFINGER) {
-    delay(40);
+  if (!waitForFingerprintState(FINGERPRINT_NOFINGER, ENROLLMENT_REMOVE_FINGER_TIMEOUT_MS)) {
+    Serial.println("[ENROLL] Timed out waiting for finger removal.");
+    if (beneficiaryId > 0) {
+      sendEnrollmentStatus(beneficiaryId, "FAILED_ENROLLMENT", "Timed out waiting for finger removal");
+    }
+    return false;
   }
 
+  if (beneficiaryId > 0) sendEnrollmentStatus(beneficiaryId, "PLACE_SAME_FINGER", "Place same finger again");
   Serial.println("[ENROLL] Place the same finger again.");
-  while (finger.getImage() != FINGERPRINT_OK) {
-    delay(40);
+  if (!waitForFingerprintState(FINGERPRINT_OK, ENROLLMENT_SECOND_SCAN_TIMEOUT_MS)) {
+    Serial.println("[ENROLL] Timed out waiting for second finger placement.");
+    if (beneficiaryId > 0) {
+      sendEnrollmentStatus(beneficiaryId, "FAILED_ENROLLMENT", "Timed out waiting for second finger placement");
+    }
+    return false;
   }
 
   if (finger.image2Tz(2) != FINGERPRINT_OK) {
     Serial.println("[ENROLL] Second image conversion failed.");
+    if (beneficiaryId > 0) sendEnrollmentStatus(beneficiaryId, "FAILED_ENROLLMENT", "Second scan failed - try again");
     return false;
   }
 
   if (finger.createModel() != FINGERPRINT_OK) {
     Serial.println("[ENROLL] Fingerprints did not match.");
+    if (beneficiaryId > 0) sendEnrollmentStatus(beneficiaryId, "FAILED_ENROLLMENT", "Fingerprints did not match - try again");
     return false;
   }
 
@@ -869,6 +1093,7 @@ bool enrollFingerprintToSlot(int slot) {
     return true;
   } else {
     Serial.println("[ENROLL] Failed to store fingerprint.");
+    if (beneficiaryId > 0) sendEnrollmentStatus(beneficiaryId, "Failed to store fingerprint - try again");
     return false;
   }
 }
@@ -879,7 +1104,15 @@ void enrollFingerprint() {
     delay(50);
   }
 
-  int slot = Serial.parseInt();
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  int slot = line.toInt();
+
+  if (slot <= 0 || slot > 127) {
+    Serial.println("[ENROLL] Invalid slot. Use 1-127.");
+    return;
+  }
+
   if (enrollFingerprintToSlot(slot)) {
     Serial.println("[ENROLL] Manual enrollment completed.");
   }
@@ -892,9 +1125,14 @@ void processEnrollmentJob(const EnrollmentJob& job) {
   Serial.printf("[ENROLLMENT] Name       : %s\n", job.name.c_str());
   Serial.printf("[ENROLLMENT] Slot       : %d\n", job.slotId);
   Serial.printf("[ENROLLMENT] Device     : %s\n", job.deviceId.c_str());
-  Serial.println("[ENROLLMENT] Place beneficiary finger on the sensor.");
 
-  bool success = enrollFingerprintToSlot(job.slotId);
+  bool success = enrollFingerprintToSlot(job.slotId, job.beneficiaryId);
+  if (success) {
+    sendEnrollmentStatus(job.beneficiaryId, "ENROLLED", "Fingerprint captured successfully");
+  } else {
+    sendEnrollmentStatus(job.beneficiaryId, "FAILED_ENROLLMENT", "Fingerprint enrollment failed");
+  }
+
   reportEnrollmentResult(
     job.beneficiaryId,
     job.slotId,
@@ -992,6 +1230,7 @@ void setup() {
   Serial.println();
   Serial.println("[BOOT] AidChain hardware module starting...");
   Serial.printf("[BOOT] Device ID: %s\n", DEVICE_ID.c_str());
+  Serial.printf("[BOOT] Mode: %s\n", SYSTEM_MODE);
 
   if (!sensorReady()) {
     while (true) {
@@ -1013,7 +1252,13 @@ void setup() {
   hardwarePing();
   fetchHardwareProfile();
 
-  Serial.println("[READY] Place finger on sensor.");
+  if (strcmp(SYSTEM_MODE, "REGISTER") == 0) {
+    Serial.println("[READY] Registration station ready.");
+    Serial.println("[READY] Waiting for enrollment jobs from dashboard.");
+  } else {
+    Serial.println("[READY] Distribution station ready.");
+    Serial.println("[READY] Place finger on sensor to receive aid.");
+  }
   Serial.println("[READY] Type 'R' in Serial Monitor to enroll a print.");
 }
 
@@ -1033,33 +1278,50 @@ void loop() {
   }
 
   ensureWifi();
+  monitorWifiStatus();
 
-  if (WiFi.status() == WL_CONNECTED &&
-      millis() - lastEnrollmentPollMs >= ENROLLMENT_POLL_MS) {
-    lastEnrollmentPollMs = millis();
-    EnrollmentJob job = fetchNextEnrollmentJob();
-    if (job.available) {
-      processEnrollmentJob(job);
+  // Check if green LED should be turned off
+  if (greenLedOnUntilMs > 0 && millis() > greenLedOnUntilMs) {
+    setGreen(false);
+    greenLedOnUntilMs = 0;
+  }
+
+  if (strcmp(SYSTEM_MODE, "REGISTER") == 0) {
+    // Registration mode: poll for enrollment jobs and process them immediately
+    if (WiFi.status() == WL_CONNECTED &&
+        millis() - lastEnrollmentPollMs >= ENROLLMENT_POLL_MS) {
+      lastEnrollmentPollMs = millis();
+      EnrollmentJob job = fetchNextEnrollmentJob();
+      if (job.available) {
+        processEnrollmentJob(job);
+      }
+    }
+
+  } else if (strcmp(SYSTEM_MODE, "DISTRIBUTE") == 0) {
+    // Distribution mode: continuously scan for fingerprints
+    if (millis() - lastFingerHandledMs < FINGER_COOLDOWN_MS) {
       delay(MAIN_LOOP_DELAY_MS);
       return;
     }
-  }
 
-  if (millis() - lastFingerHandledMs < FINGER_COOLDOWN_MS) {
-    delay(MAIN_LOOP_DELAY_MS);
-    return;
-  }
+    // Scan for fingerprint for aid distribution
+    int slotId = scanFingerprintSlot();
+    if (slotId > 0) {
+      Serial.printf("[SCAN] Recognized fingerprint in slot %d\n", slotId);
 
-  int slotId = scanFingerprintSlot();
-  if (slotId == -1) {
-    delay(MAIN_LOOP_DELAY_MS);
-    return;
-  }
+      // Calculate beneficiary ID from slot
+      int beneficiaryId = slotId + SLOT_ID_OFFSET;
 
-  if (slotId > 0) {
-    handleAuthenticationSuccess(slotId);
-  } else {
-    handleAuthenticationFailure();
+      // Distribute aid via API
+      submitDistribution(beneficiaryId);
+
+      lastFingerHandledMs = millis();
+    } else if (slotId == -2 || slotId == -3) {
+      // Failed scan
+      signalFailure();
+      Serial.println("[SCAN] Fingerprint scan failed.");
+      lastFingerHandledMs = millis();
+    }
   }
 
   delay(MAIN_LOOP_DELAY_MS);
