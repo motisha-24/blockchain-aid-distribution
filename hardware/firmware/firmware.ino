@@ -151,18 +151,31 @@ void runSelfTest() {
   blinkBoth(1, 220, 160);
 }
 
+void signalIdentified() {
+  // Identified: 3 fast green blinks
+  blinkLed(GREEN_LED_PIN, 3, 80, 80); 
+}
+
+void signalRecorded() {
+  // Recorded: 3 gentle green blinks
+  blinkLed(GREEN_LED_PIN, 3, 400, 300);
+}
+
+void signalRecordFailed() {
+  // Failure: 3 red blinks
+  blinkLed(RED_LED_PIN, 3, 200, 200);
+}
+
 void signalSuccess() {
-  blinkLed(GREEN_LED_PIN, 3, 180, 130);
+  signalRecorded();
 }
 
 void signalFailure() {
-  setRed(true);
-  delay(1000); // Red LED on for 1 second
-  setRed(false);
+  signalRecordFailed();
 }
 
 void signalDuplicate() {
-  blinkLed(RED_LED_PIN, 3, 200, 120);
+  blinkLed(RED_LED_PIN, 3, 200, 200);
 }
 
 void signalTokenExpired() {
@@ -882,6 +895,11 @@ void reportFailedAttempt(int beneficiaryId) {
 }
 
 void handleSuccessfulDistribution(int beneficiaryId, const String& txReference) {
+  if (!gsmAlive()) {
+    Serial.println("[SMS] GSM module not detected. Skipping SMS confirmation.");
+    return;
+  }
+  
   BeneficiaryInfo info = fetchBeneficiaryInfo(beneficiaryId);
   if (!info.success || info.phone.length() == 0) {
     Serial.println("[SMS] Beneficiary phone lookup failed. SMS skipped.");
@@ -923,19 +941,21 @@ void handleDistributeResponse(int beneficiaryId, int httpStatus,
     Serial.printf("[API] JSON parse failed: %s\n", err.c_str());
     signalFailure();
     return;
+    return;
   }
 
-  String action = String((const char*)(doc["action"] | "UNKNOWN"));
-  String message = String((const char*)(doc["message"] | ""));
+  String action = doc["action"] | "UNKNOWN";
+  String message = doc["message"] | "";
 
-  Serial.printf("[API] Action: %s | Message: %s\n",
-                action.c_str(), message.c_str());
+  Serial.printf("[API] Action: %s | Message: %s\n", action.c_str(), message.c_str());
 
-  if (httpStatus == 200 && action == "BATCH_PROCESSED") {
-    signalSuccess();
+  // Handle Success (Online or Cached)
+  if (httpStatus == 200 && (action == "BATCH_PROCESSED" || action == "CACHED_FOR_SYNC")) {
+    Serial.println("[API] Distribution confirmed.");
+    signalSuccess(); // Instant Green LED feedback
     
-    // Since it's a batch, find the first successful transaction hash or cache ID
-    String txHash = "BATCH-SUCCESS";
+    // Determine the reference ID for the SMS
+    String txHash = "SUCCESS";
     JsonArray results = doc["results"].as<JsonArray>();
     for (JsonObject r : results) {
         if (r["success"] == true) {
@@ -949,43 +969,29 @@ void handleDistributeResponse(int beneficiaryId, int httpStatus,
         }
     }
     
+    // Handle the SMS/Logging in a way that doesn't block the next scan
     handleSuccessfulDistribution(beneficiaryId, txHash);
     return;
   }
 
-  if (httpStatus == 200 && action == "CACHED_FOR_SYNC") {
-    signalCached();
-    // Use first cache_id from batch results
-    String cacheRef = "BATCH-CACHE";
-    JsonArray results = doc["results"].as<JsonArray>();
-    for (JsonObject r : results) {
-        if (r["success"] == true && r.containsKey("cache_id")) {
-            cacheRef = "CACHE-" + String((int)(r["cache_id"]));
-            break;
-        }
-    }
-    handleSuccessfulDistribution(beneficiaryId, cacheRef);
-    return;
-  }
-
+  // Handle Duplicates
   if (httpStatus == 409 && (action == "DUPLICATE_BLOCKED" || action == "BATCH_FAILED")) {
     signalDuplicate();
     Serial.println("[API] Batch or duplicate distribution blocked.");
     return;
   }
 
+  // Handle Auth Expired
   if (httpStatus == 401) {
     signalTokenExpired();
     Serial.println("[AUTH] Token invalid or expired.");
-    if (refreshJwtToken()) {
-      Serial.println("[AUTH] Token refreshed. Ready for next scan.");
-    }
+    refreshJwtToken();
     return;
   }
 
+  // General Failure
   signalFailure();
-  Serial.printf("[API] Distribution failed with HTTP %d: %s\n",
-                httpStatus, message.c_str());
+  Serial.printf("[API] Distribution failed with HTTP %d: %s\n", httpStatus, message.c_str());
 }
 
 void submitDistribution(int beneficiaryId) {
@@ -1384,6 +1390,7 @@ void loop() {
     int slotId = scanFingerprintSlot();
     if (slotId > 0) {
       Serial.printf("[SCAN] Recognized fingerprint in slot %d\n", slotId);
+      signalIdentified(); // Fast Green 3x
 
       // Calculate beneficiary ID from slot
       int beneficiaryId = slotId + SLOT_ID_OFFSET;

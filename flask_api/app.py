@@ -981,10 +981,21 @@ def distribute_batch():
 
     results = []
     
+    # Get the current nonce for the account to handle batching
+    current_nonce = None
+    if w3.is_connected():
+        try:
+            from blockchain import account
+            current_nonce = w3.eth.get_transaction_count(account.address)
+        except:
+            pass
+
     # Process each item
     for item in items:
-        aid_type = item.get("aid_type", "").upper().strip()
-        aid_unit = item.get("aid_unit", "").upper().strip()
+        aid_type = (item.get("aid_type") or item.get("type") or "").upper().strip()
+        aid_unit = (item.get("aid_unit") or item.get("unit") or "").upper().strip()
+        if not aid_unit:
+            aid_unit = "UNITS"
         amount = int(item.get("amount", 0))
         campaign_id = item.get("campaign_id")
         
@@ -1020,9 +1031,16 @@ def distribute_batch():
                     results.append({"success": False, "aid_type": aid_type, "error": reserve["error"]})
                     continue
 
-            dist_result = distribute_aid(b_id, amount, aid_type, aid_unit, location)
+            dist_result = distribute_aid(
+                b_id, amount, aid_type, aid_unit, location, 
+                wait_for_receipt=False, 
+                manual_nonce=current_nonce
+            )
 
             if dist_result["success"]:
+                if current_nonce is not None:
+                    current_nonce += 1
+                
                 results.append({
                     "success": True,
                     "action": "DISTRIBUTED",
@@ -1037,7 +1055,7 @@ def distribute_batch():
                     f"{aid_type} {amount} {aid_unit} distributed to beneficiary {b_id}",
                     data.get("device_id", "mobile"),
                     officer_id,
-                    f"Tx: {dist_result['tx_hash']} | Block: {dist_result.get('block', 'N/A')}"
+                    f"Tx: {dist_result['tx_hash']} | Nonce: {current_nonce-1} | Block: {dist_result.get('block', 'N/A')}"
                 )
                 
                 import time

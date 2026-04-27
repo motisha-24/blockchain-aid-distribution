@@ -51,15 +51,19 @@ else:
 
 
 # ── HELPER: Build and send a transaction ─────────────────────
-def send_transaction(contract_function):
+def send_transaction(contract_function, wait_for_receipt=True, manual_nonce=None):
     if not w3.is_connected():
         return {"success": False, "error": "Blockchain node is not reachable"}
     if account is None:
         return {"success": False, "error": "PRIVATE_KEY is missing or invalid"}
 
     try:
-        nonce = w3.eth.get_transaction_count(account.address)
-        gas_price = w3.eth.gas_price
+        if manual_nonce is not None:
+            nonce = manual_nonce
+        else:
+            nonce = w3.eth.get_transaction_count(account.address)
+            
+        gas_price = int(w3.eth.gas_price * 1.1) # Bump by 10% for priority
         tx    = contract_function.build_transaction({
             "gas"     : 400000,
             "gasPrice": gas_price,
@@ -69,6 +73,15 @@ def send_transaction(contract_function):
         })
         signed  = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        
+        if not wait_for_receipt:
+            return {
+                "success" : True,
+                "tx_hash" : tx_hash.hex(),
+                "block"   : 0,
+                "status"  : 1 # Assume success for pending
+            }
+
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
         return {
             "success" : True,
@@ -193,7 +206,7 @@ def get_total_beneficiaries():
 #   distribute_aid(1, 2,  "CLOTHES",    "UNITS",   "Gweru Ward 5")
 #   distribute_aid(1, 25, "FERTILISER", "KG",      "Gweru Ward 5")
 #   distribute_aid(1, 1,  "BLANKETS",   "UNITS",   "Gweru Ward 5")
-def distribute_aid(beneficiary_id, amount, aid_type, aid_unit, location):
+def distribute_aid(beneficiary_id, amount, aid_type, aid_unit, location, wait_for_receipt=True, manual_nonce=None):
     try:
         fn = aid_contract.functions.distribute(
             beneficiary_id,
@@ -202,7 +215,7 @@ def distribute_aid(beneficiary_id, amount, aid_type, aid_unit, location):
             aid_unit.upper(),    # normalise to uppercase
             location
         )
-        return send_transaction(fn)
+        return send_transaction(fn, wait_for_receipt=wait_for_receipt, manual_nonce=manual_nonce)
     except Exception as e:
         return {"success": False, "error": str(e)}
 
