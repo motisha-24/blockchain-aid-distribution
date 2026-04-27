@@ -41,7 +41,7 @@ String JWT_TOKEN = "";
 // Change this before uploading
 // "REGISTER" = registration mode
 // "DISTRIBUTE" = distribution mode
-#define SYSTEM_MODE "REGISTER"
+#define SYSTEM_MODE "DISTRIBUTE"
 
 String DEVICE_ID = (SYSTEM_MODE == "REGISTER") ? "aidchain-registration-01" : "aidchain-distribution-01";
 String OFFICER_ID = "ngo_officer";
@@ -74,9 +74,9 @@ constexpr unsigned long WIFI_RECONNECT_MS = 10000;
 constexpr unsigned long MAIN_LOOP_DELAY_MS = 120;
 constexpr unsigned long FINGER_COOLDOWN_MS = 1600;
 constexpr unsigned long ENROLLMENT_POLL_MS = 5000;
-constexpr unsigned long ENROLLMENT_FIRST_SCAN_TIMEOUT_MS = 20000;
-constexpr unsigned long ENROLLMENT_REMOVE_FINGER_TIMEOUT_MS = 10000;
-constexpr unsigned long ENROLLMENT_SECOND_SCAN_TIMEOUT_MS = 20000;
+constexpr unsigned long ENROLLMENT_FIRST_SCAN_TIMEOUT_MS = 45000;
+constexpr unsigned long ENROLLMENT_SECOND_SCAN_TIMEOUT_MS = 45000;
+constexpr unsigned long ENROLLMENT_REMOVE_FINGER_TIMEOUT_MS = 15000;
 
 HardwareSerial FingerSerial(2);
 HardwareSerial GsmSerial(1);
@@ -349,6 +349,33 @@ bool addJsonHeaders(HTTPClient& http) {
   return true;
 }
 
+void logHardwareEvent(const String& type, const String& message, const String& details = "") {
+  if (WiFi.status() != WL_CONNECTED) return;
+  
+  if (JWT_TOKEN.length() == 0) {
+    if (!hardwareLogin()) return;
+  }
+  
+  HTTPClient http;
+  http.begin(endpointUrl("/api/hardware/events"));
+  if (!addJsonHeaders(http)) {
+    http.end();
+    return;
+  }
+  
+  DynamicJsonDocument doc(512);
+  doc["event_type"] = type;
+  doc["message"] = message;
+  doc["device_id"] = DEVICE_ID;
+  doc["details"] = details;
+  
+  String body;
+  serializeJson(doc, body);
+  http.POST(body);
+  http.end();
+}
+
+
 bool hardwareLogin() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[AUTH] Cannot login while WiFi is offline.");
@@ -481,6 +508,10 @@ void sendEnrollmentStatus(int beneficiaryId, const String& message) {
 
 bool fetchHardwareProfile() {
   if (WiFi.status() != WL_CONNECTED) return false;
+
+  if (JWT_TOKEN.length() == 0) {
+    if (!hardwareLogin()) return false;
+  }
 
   HTTPClient http;
   http.begin(endpointUrl("/api/hardware/profile"));
@@ -876,9 +907,12 @@ void handleSuccessfulDistribution(int beneficiaryId, const String& txReference) 
 
   if (smsSent) {
     Serial.println("[SMS] Beneficiary SMS sent via SIM800L.");
+    logHardwareEvent("SMS_SENT", "SMS confirmation sent to " + info.phone);
   } else {
     Serial.println("[SMS] SMS send failed on SIM800L.");
+    logHardwareEvent("SMS_FAILED", "Failed to send SMS to " + info.phone);
   }
+
 }
 
 void handleDistributeResponse(int beneficiaryId, int httpStatus,
@@ -956,15 +990,18 @@ void handleDistributeResponse(int beneficiaryId, int httpStatus,
 
 void submitDistribution(int beneficiaryId) {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[API] Flask unreachable over WiFi. Server cannot cache.");
+    Serial.println("[API] Flask unreachable over WiFi.");
     signalFailure();
     return;
   }
 
-  fetchHardwareProfile();
+  // We no longer call fetchHardwareProfile() here because it's already called 
+  // periodically in the main loop. This prevents socket congestion.
 
   HTTPClient http;
   http.begin(endpointUrl("/api/distribute/batch"));
+  http.setTimeout(60000); // 60 seconds timeout for blockchain transactions
+  
   if (!addJsonHeaders(http)) {
     http.end();
     Serial.println("[AUTH] Missing JWT token.");
@@ -972,27 +1009,33 @@ void submitDistribution(int beneficiaryId) {
     return;
   }
 
-  DynamicJsonDocument doc(1024);
+  DynamicJsonDocument doc(2048); // Increased size
   doc["beneficiary_id"] = beneficiaryId;
   doc["location"] = ACTIVE_LOCATION;
   doc["officer_id"] = OFFICER_ID;
   doc["device_id"] = DEVICE_ID;
 
-  DynamicJsonDocument itemsDoc(512);
+  DynamicJsonDocument itemsDoc(1024);
   deserializeJson(itemsDoc, ACTIVE_ITEMS_JSON);
   doc["items"] = itemsDoc.as<JsonArray>();
 
   String body;
   serializeJson(doc, body);
 
+  logHardwareEvent("DISTRIBUTION_STARTED", "Initiating blockchain transaction for beneficiary " + String(beneficiaryId));
+
   int status = http.POST(body);
   String response = http.getString();
   http.end();
 
   Serial.printf("[API] /api/distribute/batch HTTP %d\n", status);
-  Serial.printf("[API] Body: %s\n", response.c_str());
-
-  handleDistributeResponse(beneficiaryId, status, response);
+  if (status > 0) {
+    handleDistributeResponse(beneficiaryId, status, response);
+  } else {
+    Serial.printf("[API] Connection failed: %s\n", http.errorToString(status).c_str());
+    logHardwareEvent("CONNECTION_FAILED", "Hardware could not reach server during distribution", "Error: " + http.errorToString(status));
+    signalFailure();
+  }
 }
 
 // ----------------------------------------------------------------
@@ -1038,6 +1081,11 @@ bool enrollFingerprintToSlot(int slot, int beneficiaryId) {
   }
 
   Serial.printf("[ENROLL] Starting enrollment for slot %d\n", slot);
+  
+  // Clear the slot at the START to avoid any potential write conflicts later
+  finger.deleteModel(slot);
+  delay(200);
+
   Serial.println("[ENROLL] Place finger on sensor.");
   if (beneficiaryId > 0) {
     sendEnrollmentStatus(beneficiaryId, "PLACE_FINGER", "Please place finger on sensor");
@@ -1056,7 +1104,7 @@ bool enrollFingerprintToSlot(int slot, int beneficiaryId) {
     return false;
   }
 
-  if (beneficiaryId > 0) sendEnrollmentStatus(beneficiaryId, "Good — remove finger");
+  if (beneficiaryId > 0) sendEnrollmentStatus(beneficiaryId, "Good - remove finger");
   Serial.println("[ENROLL] Remove finger.");
   if (!waitForFingerprintState(FINGERPRINT_NOFINGER, ENROLLMENT_REMOVE_FINGER_TIMEOUT_MS)) {
     Serial.println("[ENROLL] Timed out waiting for finger removal.");
@@ -1068,6 +1116,7 @@ bool enrollFingerprintToSlot(int slot, int beneficiaryId) {
 
   if (beneficiaryId > 0) sendEnrollmentStatus(beneficiaryId, "PLACE_SAME_FINGER", "Place same finger again");
   Serial.println("[ENROLL] Place the same finger again.");
+  
   if (!waitForFingerprintState(FINGERPRINT_OK, ENROLLMENT_SECOND_SCAN_TIMEOUT_MS)) {
     Serial.println("[ENROLL] Timed out waiting for second finger placement.");
     if (beneficiaryId > 0) {
@@ -1088,12 +1137,13 @@ bool enrollFingerprintToSlot(int slot, int beneficiaryId) {
     return false;
   }
 
+  delay(200); // Wait for sensor to stabilize before storing
   if (finger.storeModel(slot) == FINGERPRINT_OK) {
-    Serial.printf("[ENROLL] Finger stored in slot %d\n", slot);
+    Serial.printf("[ENROLL] Finger stored successfully in slot %d\n", slot);
     return true;
   } else {
-    Serial.println("[ENROLL] Failed to store fingerprint.");
-    if (beneficiaryId > 0) sendEnrollmentStatus(beneficiaryId, "Failed to store fingerprint - try again");
+    Serial.println("[ENROLL] Failed to store fingerprint model in sensor memory.");
+    if (beneficiaryId > 0) sendEnrollmentStatus(beneficiaryId, "FAILED_ENROLLMENT", "Sensor memory write error");
     return false;
   }
 }
@@ -1157,12 +1207,16 @@ int scanFingerprintSlot() {
 
   if (p != FINGERPRINT_OK) {
     Serial.printf("[AUTH] getImage failed: %u\n", p);
+    logHardwareEvent("FINGER_DETECTED_FAILED", "Finger detected but capture failed", "Error code: " + String(p));
     return -2;
   }
+
+  logHardwareEvent("FINGER_DETECTED", "Finger detected on sensor, identifying...");
 
   p = finger.image2Tz();
   if (p != FINGERPRINT_OK) {
     Serial.printf("[AUTH] image2Tz failed: %u\n", p);
+    logHardwareEvent("IDENTITY_CHECK_FAILED", "Could not process fingerprint image", "Error code: " + String(p));
     return -2;
   }
 
@@ -1172,12 +1226,17 @@ int scanFingerprintSlot() {
                   finger.fingerID, finger.confidence);
     if (finger.confidence < MIN_CONFIDENCE) {
       Serial.println("[AUTH] Match confidence below threshold.");
+      logHardwareEvent("IDENTITY_UNCONFIRMED", "Finger match confidence too low", "Confidence: " + String(finger.confidence));
       return -3;
     }
+    
+    int beneficiaryId = finger.fingerID + SLOT_ID_OFFSET;
+    logHardwareEvent("IDENTITY_CONFIRMED", "Identity confirmed for beneficiary " + String(beneficiaryId), "Confidence: " + String(finger.confidence));
     return finger.fingerID;
   }
 
   Serial.println("[AUTH] No matching fingerprint found.");
+  logHardwareEvent("IDENTITY_UNKNOWN", "Fingerprint not recognized in database");
   return -3;
 }
 
@@ -1268,7 +1327,13 @@ void loop() {
     if (cmd == 'R' || cmd == 'r') {
       enrollFingerprint();
       Serial.println("[READY] Enrollment mode finished.");
+    } else if (cmd == 'C' || cmd == 'c') {
+      Serial.println("WARNING: Clearing ALL fingerprints in 3 seconds... (Press RESET to abort)");
+      delay(3000);
+      finger.emptyDatabase();
+      Serial.println("Fingerprint database CLEARED.");
     }
+
   }
 
   if (sessionLocked) {
@@ -1291,6 +1356,10 @@ void loop() {
     if (WiFi.status() == WL_CONNECTED &&
         millis() - lastEnrollmentPollMs >= ENROLLMENT_POLL_MS) {
       lastEnrollmentPollMs = millis();
+      
+      // Periodically refresh profile even in register mode
+      fetchHardwareProfile();
+      
       EnrollmentJob job = fetchNextEnrollmentJob();
       if (job.available) {
         processEnrollmentJob(job);
@@ -1298,6 +1367,13 @@ void loop() {
     }
 
   } else if (strcmp(SYSTEM_MODE, "DISTRIBUTE") == 0) {
+    // Periodically refresh session/profile
+    if (WiFi.status() == WL_CONNECTED &&
+        millis() - lastEnrollmentPollMs >= 30000) { // Reuse poll timer for profile refresh
+      lastEnrollmentPollMs = millis();
+      fetchHardwareProfile();
+    }
+
     // Distribution mode: continuously scan for fingerprints
     if (millis() - lastFingerHandledMs < FINGER_COOLDOWN_MS) {
       delay(MAIN_LOOP_DELAY_MS);
@@ -1326,3 +1402,4 @@ void loop() {
 
   delay(MAIN_LOOP_DELAY_MS);
 }
+

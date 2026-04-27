@@ -54,3 +54,24 @@ export async function getHardwareEvents(limit = 50) {
   const { data } = await client.get(`/api/hardware/events?limit=${limit}`);
   return data;
 }
+
+export async function getActivePackages(location = "") {
+  const url = location ? `/api/packages/active?location=${location}` : "/api/packages/active";
+  const { data } = await client.get(url);
+  return data;
+}
+
+export async function activateSession(payload) {
+  const { data } = await client.post("/api/sessions/activate", payload);
+  return data;
+}
+
+export async function getActiveSession() {
+  const { data } = await client.get("/api/sessions/active");
+  return data;
+}
+
+export async function distributeBatch(payload) {
+  const { data } = await client.post("/api/distribute/batch", payload);
+  return data;
+}

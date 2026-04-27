@@ -117,7 +117,6 @@ export const getTransaction       = (id) =>
 export const getTotalTransactions = () =>
   api.get('/api/transactions/total');
 
-
 // ── SMS ──────────────────────────────────────────────────────
 export const getSMSLog = () => api.get('/api/sms/log');
 
@@ -125,3 +124,8 @@ export const getSMSLog = () => api.get('/api/sms/log');
 // ── Hardware Events ──────────────────────────────────────────
 export const getHardwareEvents = (limit = 50) =>
   api.get(`/api/hardware/events?limit=${limit}`);
+
+// ── Aid Packages ─────────────────────────────────────────────
+export const getActivePackages = () => api.get('/api/packages/active');
+export const createAidPackage = (data) => api.post('/api/packages/create', data);
+export const deleteAidPackage = (id) => api.delete(`/api/packages/${id}`);

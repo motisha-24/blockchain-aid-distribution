@@ -39,10 +39,10 @@ def verify_password(password: str, stored_hash: str) -> bool:
 
 # ── Get database connection ───────────────────────────────────
 def get_connection():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    # Added timeout and WAL mode to prevent 'database is locked' errors
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row  # allows dict-like access
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
@@ -139,6 +139,31 @@ def init_database():
         cursor.execute("ALTER TABLE hardware_events ADD COLUMN timestamp TEXT NOT NULL DEFAULT ''")
     if 'details' not in existing_columns:
         cursor.execute("ALTER TABLE hardware_events ADD COLUMN details TEXT DEFAULT ''")
+
+    # New Aid Distribution Schema
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS aid_packages (
+            id          TEXT     PRIMARY KEY,
+            cycle_id    TEXT     NOT NULL,
+            location    TEXT     NOT NULL,
+            items       TEXT     NOT NULL,
+            is_active   INTEGER  DEFAULT 1,
+            created_at  TEXT     NOT NULL,
+            updated_at  TEXT     NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS distribution_sessions (
+            id                TEXT     PRIMARY KEY,
+            officer_id        TEXT     NOT NULL,
+            location          TEXT     NOT NULL,
+            active_package_id TEXT     NOT NULL,
+            start_time        TEXT     NOT NULL,
+            end_time          TEXT,
+            status            TEXT     NOT NULL DEFAULT 'RUNNING'
+        )
+    """)
 
     conn.commit()
 
@@ -487,7 +512,17 @@ def get_hardware_profile():
         profile["items"] = json.loads(profile["items"])
     except:
         profile["items"] = []
-
+    
+    # Check if there is an active session to override profile
+    session = get_active_session()
+    if session.get("success") and session.get("session"):
+        s = session["session"]
+        profile["location"] = s.get("location", profile["location"])
+        profile["officer_id"] = s.get("officer_id", profile["officer_id"])
+        if s.get("package") and s["package"].get("items"):
+            profile["items"] = s["package"]["items"]
+            profile["session_id"] = s["id"]
+    
     return {"success": True, "profile": profile}
 
 
@@ -777,12 +812,14 @@ def log_hardware_event(event_type, message, device_id, officer_id, details=""):
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO hardware_events
-        (event_type, message, device_id, officer_id, created_at, timestamp, details)
+        (event_type, message, device_id, officer_id, timestamp, details, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
         event_type.strip(), message.strip(), device_id.strip(),
-        officer_id.strip(), now, now, details.strip()
+        officer_id.strip(), now, details.strip(), now
     ))
+
+
     conn.commit()
     conn.close()
     return {"success": True}
@@ -799,3 +836,166 @@ def get_recent_hardware_events(limit=50):
     rows = cursor.fetchall()
     conn.close()
     return {"success": True, "events": [dict(row) for row in rows]}
+
+
+# ── Aid Packages & Distribution Sessions ─────────────────────
+
+import uuid
+
+def create_aid_package(cycle_id, location, items):
+    conn = get_connection()
+    cursor = conn.cursor()
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    package_id = str(uuid.uuid4())
+    
+    # Validate items
+    if not isinstance(items, list) or len(items) == 0:
+        return {"success": False, "error": "Items must be a non-empty list"}
+        
+    for item in items:
+        if item.get("aid_type", "").upper() not in VALID_AID_TYPES:
+            return {"success": False, "error": f"Invalid aid type: {item.get('aid_type')}"}
+        if item.get("unit", "").upper() not in VALID_AID_UNITS:
+            # Fallback to aid_unit
+            if item.get("aid_unit", "").upper() not in VALID_AID_UNITS:
+                return {"success": False, "error": f"Invalid aid unit: {item.get('unit') or item.get('aid_unit')}"}
+            else:
+                item["unit"] = item["aid_unit"].upper()
+        else:
+            item["unit"] = item["unit"].upper()
+            
+        item["type"] = item.get("aid_type", "").upper()
+        
+    try:
+        cursor.execute("""
+            INSERT INTO aid_packages (id, cycle_id, location, items, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?)
+        """, (package_id, cycle_id, location, json.dumps(items), now, now))
+        conn.commit()
+        return {"success": True, "package_id": package_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+def get_active_aid_packages(location=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    if location:
+        cursor.execute("SELECT * FROM aid_packages WHERE is_active = 1 AND location = ?", (location,))
+    else:
+        cursor.execute("SELECT * FROM aid_packages WHERE is_active = 1")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    packages = []
+    for row in rows:
+        pkg = dict(row)
+        try:
+            pkg["items"] = json.loads(pkg["items"])
+        except:
+            pkg["items"] = []
+        packages.append(pkg)
+    return {"success": True, "packages": packages}
+
+def delete_aid_package(package_id):
+    """Soft-delete an aid package by marking it inactive."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id FROM aid_packages WHERE id = ? AND is_active = 1", (package_id,))
+        if not cursor.fetchone():
+            return {"success": False, "error": "Package not found or already deleted"}
+        cursor.execute(
+            "UPDATE aid_packages SET is_active = 0, updated_at = ? WHERE id = ?",
+            (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), package_id)
+        )
+        conn.commit()
+        return {"success": True, "message": "Package deleted"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+def close_old_sessions():
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        # Close any sessions started before today
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d 00:00:00")
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            UPDATE distribution_sessions 
+            SET status = 'CLOSED', end_time = ? 
+            WHERE status = 'RUNNING' AND start_time < ?
+        """, (now, today_str))
+        conn.commit()
+    except sqlite3.OperationalError as e:
+        if "locked" in str(e).lower():
+            # If locked, another process is already cleaning up or updating sessions.
+            # We can safely skip this since it's just a background cleanup.
+            pass
+        else:
+            raise e
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+def activate_distribution_session(officer_id, location, active_package_id):
+    # First close old sessions
+    close_old_sessions()
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    session_id = str(uuid.uuid4())
+    
+    # Check if package exists and is active
+    cursor.execute("SELECT id FROM aid_packages WHERE id = ? AND is_active = 1", (active_package_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return {"success": False, "error": "Invalid or inactive aid package"}
+        
+    # Close any existing running session for this officer
+    cursor.execute("UPDATE distribution_sessions SET status = 'CLOSED', end_time = ? WHERE officer_id = ? AND status = 'RUNNING'", (now, officer_id))
+    
+    cursor.execute("""
+        INSERT INTO distribution_sessions (id, officer_id, location, active_package_id, start_time, status)
+        VALUES (?, ?, ?, ?, ?, 'RUNNING')
+    """, (session_id, officer_id, location, active_package_id, now))
+    conn.commit()
+    conn.close()
+    return {"success": True, "session_id": session_id}
+
+def get_active_session(officer_id=None):
+    close_old_sessions()
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    if officer_id:
+        cursor.execute("SELECT * FROM distribution_sessions WHERE officer_id = ? AND status = 'RUNNING'", (officer_id,))
+    else:
+        cursor.execute("SELECT * FROM distribution_sessions WHERE status = 'RUNNING'")
+        
+    row = cursor.fetchone()
+    
+    if not row:
+        conn.close()
+        return {"success": False, "error": "No active session found"}
+        
+    session = dict(row)
+    
+    # Also fetch the package details
+    cursor.execute("SELECT * FROM aid_packages WHERE id = ?", (session["active_package_id"],))
+    pkg_row = cursor.fetchone()
+    conn.close()
+    
+    if pkg_row:
+        pkg = dict(pkg_row)
+        try:
+            pkg["items"] = json.loads(pkg["items"])
+            session["package"] = pkg
+        except:
+            session["package"] = None
+            
+    return {"success": True, "session": session}

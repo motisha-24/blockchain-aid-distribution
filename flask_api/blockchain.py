@@ -59,9 +59,10 @@ def send_transaction(contract_function):
 
     try:
         nonce = w3.eth.get_transaction_count(account.address)
+        gas_price = w3.eth.gas_price
         tx    = contract_function.build_transaction({
             "gas"     : 400000,
-            "gasPrice": w3.to_wei("20", "gwei"),
+            "gasPrice": gas_price,
             "nonce"   : nonce,
             "from"    : account.address,
             "chainId" : int(CHAIN_ID),

@@ -1,94 +1,81 @@
 import React, { useState, useEffect } from "react";
-import { 
-  View, Text, StyleSheet, ScrollView, TextInput, 
-  Pressable, ActivityIndicator, Alert 
+import {
+  View, Text, StyleSheet, ScrollView, TextInput,
+  Pressable, ActivityIndicator, Alert, RefreshControl
 } from "react-native";
-import { getHardwareProfile, updateHardwareProfile } from "../api/endpoints";
+import { getActivePackages, activateSession, getActiveSession } from "../api/endpoints";
 import { useAuth } from "../context/AuthContext";
 
 export default function SessionSetupScreen({ navigation }) {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
-  
+
   const [location, setLocation] = useState("");
-  const [items, setItems] = useState([]);
+  const [packages, setPackages] = useState([]);
+  const [selectedPackageId, setSelectedPackageId] = useState("");
+  const [activeSession, setActiveSession] = useState(null);
 
   useEffect(() => {
-    loadProfile();
+    loadData();
   }, []);
 
-  const loadProfile = async () => {
+  const loadData = async (isRefresh = false) => {
+    if (!isRefresh) setLoading(true);
     try {
-      const res = await getHardwareProfile();
-      if (res.success && res.profile) {
-        setLocation(res.profile.location || "");
-        setItems(res.profile.items || []);
+      const [sessionRes, pkgRes] = await Promise.all([
+        getActiveSession().catch(() => ({ success: false })),
+        getActivePackages()
+      ]);
+
+      if (sessionRes.success && sessionRes.session) {
+        setActiveSession(sessionRes.session);
+        setLocation(sessionRes.session.location || "");
+        setSelectedPackageId(sessionRes.session.active_package_id || "");
+      } else {
+        setActiveSession(null);
+      }
+
+      if (pkgRes.success) {
+        setPackages(pkgRes.packages || []);
       }
     } catch (error) {
-      console.log("Failed to load profile", error);
+      console.log("Failed to load session data", error);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  const addItem = () => {
-    setItems([...items, { aid_type: "", aid_unit: "", amount: "" }]);
+  const onRefresh = () => {
+    setRefreshing(true);
+    loadData(true);
   };
 
-  const removeItem = (index) => {
-    const newItems = [...items];
-    newItems.splice(index, 1);
-    setItems(newItems);
-  };
-
-  const updateItem = (index, field, value) => {
-    const newItems = [...items];
-    newItems[index][field] = value;
-    setItems(newItems);
-  };
-
-  const handleSave = async () => {
-    if (!location) {
-      Alert.alert("Error", "Location is required");
+  const handleActivate = async () => {
+    if (!location.trim()) {
+      Alert.alert("Required", "Please enter the distribution location.");
       return;
     }
-    if (items.length === 0) {
-      Alert.alert("Error", "Please add at least one aid item");
+    if (!selectedPackageId) {
+      Alert.alert("Required", "Please select an Aid Package before activating.");
       return;
     }
-
-    // Validate items
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (!item.aid_type || !item.aid_unit || !item.amount) {
-        Alert.alert("Error", `Item #${i + 1} is missing fields`);
-        return;
-      }
-    }
-
     setSaving(true);
     try {
-      const payload = {
-        location: location,
-        items: items.map(item => ({
-          ...item,
-          amount: parseInt(item.amount)
-        })),
-        officer_id: user?.username || "ngo_officer",
-        device_id: "aidchain-field-01" // Standard fallback for field device
-      };
-      
-      const res = await updateHardwareProfile(payload);
+      const res = await activateSession({ location: location.trim(), package_id: selectedPackageId });
       if (res.success) {
-        Alert.alert("Success", "Distribution Session active! Hardware is synced.", [
-          { text: "OK", onPress: () => navigation.goBack() }
-        ]);
+        Alert.alert(
+          "✅ Session Activated",
+          "Distribution session is now live. Hardware and mobile distribution will use this package.",
+          [{ text: "Go to Dashboard", onPress: () => navigation.goBack() }]
+        );
       } else {
-        Alert.alert("Error", res.error || "Failed to update session");
+        Alert.alert("Error", res.error || "Failed to start session");
       }
     } catch (error) {
-      const msg = error.response?.data?.error || error.response?.data?.message || error.message;
+      const msg = error.response?.data?.error || error.message;
       Alert.alert("Error", "Failed to start session: " + msg);
     } finally {
       setSaving(false);
@@ -98,122 +85,200 @@ export default function SessionSetupScreen({ navigation }) {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#2b6cb0" />
-        <Text style={{ marginTop: 10 }}>Loading Session...</Text>
+        <ActivityIndicator size="large" color="#3182ce" />
+        <Text style={styles.loadingText}>Loading packages...</Text>
       </View>
     );
   }
 
   return (
-    <ScrollView style={styles.page} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Distribution Session setup</Text>
+    <ScrollView
+      style={styles.page}
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3182ce" />}
+    >
+      <Text style={styles.title}>Configure Session</Text>
       <Text style={styles.subtitle}>
-        Define the multi-aid package to be distributed for each fingerprint scan.
+        Select a centrally-defined Aid Package to activate for this distribution session.
       </Text>
 
+      {/* Active session banner */}
+      {activeSession && (
+        <View style={styles.activeBanner}>
+          <Text style={styles.activeBannerIcon}>🟢</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.activeBannerTitle}>Session Active</Text>
+            <Text style={styles.activeBannerSub}>Location: {activeSession.location}</Text>
+            <Text style={styles.activeBannerSub}>Expires: End of day</Text>
+          </View>
+        </View>
+      )}
+
+      {/* Location input */}
       <View style={styles.card}>
-        <Text style={styles.label}>Distribution Location</Text>
+        <Text style={styles.label}>📍 Distribution Location *</Text>
         <TextInput
           style={styles.input}
           placeholder="e.g. Gweru Ward 5"
+          placeholderTextColor="#a0aec0"
           value={location}
           onChangeText={setLocation}
         />
       </View>
 
-      <Text style={styles.sectionTitle}>Aid Package</Text>
-      
-      {items.map((item, index) => (
-        <View key={index} style={styles.itemCard}>
-          <View style={styles.itemHeader}>
-            <Text style={styles.itemTitle}>Item #{index + 1}</Text>
-            <Pressable onPress={() => removeItem(index)} style={styles.removeBtn}>
-              <Text style={styles.removeBtnText}>Remove</Text>
-            </Pressable>
-          </View>
-          
-          <Text style={styles.label}>Aid Type (e.g. MAIZE, CASH, BLANKETS)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Type"
-            value={item.aid_type}
-            onChangeText={(v) => updateItem(index, "aid_type", v)}
-            autoCapitalize="characters"
-          />
+      {/* Package selection */}
+      <Text style={styles.sectionTitle}>
+        Available Aid Packages ({packages.length})
+      </Text>
 
-          <View style={styles.row}>
-            <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={styles.label}>Unit (KG, USD)</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Unit"
-                value={item.aid_unit}
-                onChangeText={(v) => updateItem(index, "aid_unit", v)}
-                autoCapitalize="characters"
-              />
-            </View>
-            <View style={{ flex: 1, marginLeft: 8 }}>
-              <Text style={styles.label}>Amount</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. 50"
-                value={item.amount ? String(item.amount) : ""}
-                onChangeText={(v) => updateItem(index, "amount", v)}
-                keyboardType="numeric"
-              />
-            </View>
-          </View>
+      {packages.length === 0 ? (
+        <View style={styles.emptyCard}>
+          <Text style={styles.emptyIcon}>📦</Text>
+          <Text style={styles.emptyTitle}>No Packages Available</Text>
+          <Text style={styles.emptySubtitle}>
+            An administrator must create Aid Packages from the web dashboard before you can start a session.
+          </Text>
+          <Pressable style={styles.refreshBtn} onPress={onRefresh}>
+            <Text style={styles.refreshBtnLabel}>↻ Refresh</Text>
+          </Pressable>
         </View>
-      ))}
+      ) : (
+        packages.map((pkg) => {
+          const isSelected = selectedPackageId === pkg.id;
+          return (
+            <Pressable
+              key={pkg.id}
+              style={[styles.pkgCard, isSelected && styles.pkgCardSelected]}
+              onPress={() => setSelectedPackageId(pkg.id)}
+            >
+              <View style={styles.pkgHeader}>
+                <View>
+                  <Text style={[styles.pkgTitle, isSelected && styles.pkgTitleSelected]}>
+                    📍 {pkg.location || "All Locations"}
+                  </Text>
+                  <Text style={styles.pkgMeta}>
+                    {pkg.items?.length || 0} item{(pkg.items?.length || 0) !== 1 ? "s" : ""} • Created {pkg.created_at?.split(" ")[0]}
+                  </Text>
+                </View>
+                {isSelected && (
+                  <View style={styles.selectedBadge}>
+                    <Text style={styles.selectedBadgeText}>✓ Selected</Text>
+                  </View>
+                )}
+              </View>
 
-      <Pressable style={styles.addBtn} onPress={addItem}>
-        <Text style={styles.addBtnLabel}>+ Add Aid Type</Text>
-      </Pressable>
+              <View style={styles.itemsRow}>
+                {pkg.items && pkg.items.map((it, idx) => (
+                  <View key={idx} style={[styles.itemPill, isSelected && styles.itemPillSelected]}>
+                    <Text style={[styles.itemPillText, isSelected && styles.itemPillTextSelected]}>
+                      {it.amount} {it.unit || it.aid_unit} {it.aid_type || it.type}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </Pressable>
+          );
+        })
+      )}
 
-      <Pressable style={styles.saveBtn} onPress={handleSave} disabled={saving}>
+      {/* Activate button */}
+      <Pressable
+        style={[
+          styles.activateBtn,
+          (!location.trim() || !selectedPackageId) && styles.activateBtnDisabled
+        ]}
+        onPress={handleActivate}
+        disabled={saving || !location.trim() || !selectedPackageId}
+      >
         {saving ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.saveBtnLabel}>Start Distribution Session</Text>
+          <Text style={styles.activateBtnLabel}>
+            {activeSession ? "🔄 Update Session" : "▶ Activate Session"}
+          </Text>
         )}
       </Pressable>
+
+      <Text style={styles.hint}>
+        Pull down to refresh the package list. Sessions automatically close at end of day.
+      </Text>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  page: { flex: 1, backgroundColor: "#f7fafc" },
-  content: { padding: 16, paddingBottom: 40 },
-  title: { fontSize: 24, fontWeight: "800", color: "#2d3748", marginBottom: 4 },
-  subtitle: { fontSize: 14, color: "#718096", marginBottom: 20 },
-  sectionTitle: { fontSize: 18, fontWeight: "700", color: "#2d3748", marginTop: 10, marginBottom: 10 },
-  card: {
-    backgroundColor: "#fff", padding: 16, borderRadius: 12, marginBottom: 16,
-    shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 2
+  page: { flex: 1, backgroundColor: "#f0f4f8" },
+  content: { padding: 16, gap: 12, paddingBottom: 32 },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
+  loadingText: { color: "#718096", fontSize: 14 },
+
+  title: { fontSize: 22, fontWeight: "800", color: "#1a202c" },
+  subtitle: { color: "#4a5568", fontSize: 13, lineHeight: 20 },
+
+  activeBanner: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    backgroundColor: "#c6f6d5", borderRadius: 12, padding: 14,
+    borderWidth: 1, borderColor: "#9ae6b4"
   },
-  itemCard: {
-    backgroundColor: "#fff", padding: 16, borderRadius: 12, marginBottom: 12,
+  activeBannerIcon: { fontSize: 22 },
+  activeBannerTitle: { fontWeight: "800", color: "#22543d", fontSize: 15 },
+  activeBannerSub: { color: "#276749", fontSize: 12, marginTop: 2 },
+
+  card: {
+    backgroundColor: "#fff", borderRadius: 12, padding: 14,
     borderWidth: 1, borderColor: "#e2e8f0"
   },
-  itemHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
-  itemTitle: { fontWeight: "700", color: "#4a5568", fontSize: 16 },
-  removeBtn: { backgroundColor: "#fed7d7", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
-  removeBtnText: { color: "#c53030", fontSize: 12, fontWeight: "700" },
-  label: { fontSize: 13, fontWeight: "600", color: "#4a5568", marginBottom: 6 },
+  label: { fontWeight: "700", color: "#2d3748", marginBottom: 8, fontSize: 13 },
   input: {
-    backgroundColor: "#edf2f7", borderRadius: 8, padding: 12, fontSize: 15,
-    color: "#2d3748", marginBottom: 12, borderWidth: 1, borderColor: "#e2e8f0"
+    borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 8,
+    padding: 10, color: "#1a202c", fontSize: 14, backgroundColor: "#f7fafc"
   },
-  row: { flexDirection: "row" },
-  addBtn: {
-    backgroundColor: "#ebf8ff", borderRadius: 10, padding: 14, alignItems: "center",
-    marginBottom: 24, borderWidth: 1, borderColor: "#90cdf4"
+
+  sectionTitle: { fontSize: 14, fontWeight: "700", color: "#4a5568", marginTop: 4 },
+
+  emptyCard: {
+    backgroundColor: "#fff", borderRadius: 12, padding: 28, alignItems: "center",
+    borderWidth: 1, borderColor: "#e2e8f0", gap: 8
   },
-  addBtnLabel: { color: "#3182ce", fontWeight: "700", fontSize: 16 },
-  saveBtn: {
-    backgroundColor: "#38a169", borderRadius: 10, padding: 16, alignItems: "center",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3
+  emptyIcon: { fontSize: 36 },
+  emptyTitle: { fontWeight: "800", color: "#1a202c", fontSize: 16 },
+  emptySubtitle: { color: "#718096", textAlign: "center", fontSize: 13, lineHeight: 20 },
+  refreshBtn: {
+    marginTop: 8, backgroundColor: "#ebf8ff", borderRadius: 8,
+    paddingVertical: 8, paddingHorizontal: 20, borderWidth: 1, borderColor: "#90cdf4"
   },
-  saveBtnLabel: { color: "#fff", fontWeight: "800", fontSize: 16 },
+  refreshBtnLabel: { color: "#3182ce", fontWeight: "700" },
+
+  pkgCard: {
+    backgroundColor: "#fff", borderRadius: 12, padding: 14,
+    borderWidth: 2, borderColor: "#e2e8f0", gap: 10
+  },
+  pkgCardSelected: { borderColor: "#3182ce", backgroundColor: "#ebf8ff" },
+  pkgHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  pkgTitle: { fontSize: 15, fontWeight: "800", color: "#2d3748" },
+  pkgTitleSelected: { color: "#2b6cb0" },
+  pkgMeta: { fontSize: 12, color: "#718096", marginTop: 2 },
+  selectedBadge: {
+    backgroundColor: "#3182ce", borderRadius: 20,
+    paddingHorizontal: 10, paddingVertical: 3
+  },
+  selectedBadgeText: { color: "#fff", fontWeight: "700", fontSize: 11 },
+
+  itemsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  itemPill: {
+    backgroundColor: "#edf2f7", borderRadius: 20,
+    paddingHorizontal: 10, paddingVertical: 4
+  },
+  itemPillSelected: { backgroundColor: "#bee3f8" },
+  itemPillText: { fontSize: 12, fontWeight: "600", color: "#4a5568" },
+  itemPillTextSelected: { color: "#2b6cb0" },
+
+  activateBtn: {
+    backgroundColor: "#2b6cb0", borderRadius: 12, paddingVertical: 14,
+    alignItems: "center", marginTop: 8
+  },
+  activateBtnDisabled: { backgroundColor: "#a0aec0" },
+  activateBtnLabel: { color: "#fff", fontWeight: "800", fontSize: 16 },
+
+  hint: { textAlign: "center", color: "#a0aec0", fontSize: 12, lineHeight: 18 },
 });

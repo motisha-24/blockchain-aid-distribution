@@ -11,7 +11,8 @@ import {
   getStats, advanceCycle,
   getPending, syncCache,
   getAllBeneficiaries, getDistributionHistory,
-  getCampaigns, createCampaign
+  getCampaigns, createCampaign,
+  getActivePackages, createAidPackage, deleteAidPackage
 } from '../services/api';
 import axios from 'axios';
 
@@ -41,6 +42,11 @@ export default function AdminDashboard() {
   const [newCampaign,     setNewCampaign]     = useState({ name:'', donor_label:'', aid_type:'MAIZE', budget_total:'' });
   const [newCampaignErrors,setNewCampaignErrors]= useState({});
 
+  // ── Aid Packages ───────────────────────────────────────────
+  const [activePackages,  setActivePackages]  = useState([]);
+  const [newPackage,      setNewPackage]      = useState({ location:'', items: [{ aid_type: 'MAIZE', unit: 'KG', amount: '' }] });
+  const [packageLoading,  setPackageLoading]  = useState(false);
+
   // ── Stat card modal ────────────────────────────────────────
   const [modal, setModal] = useState(null);
   // modal = { type: 'beneficiaries'|'distributions'|'users'|'pending', data: [] }
@@ -59,22 +65,97 @@ export default function AdminDashboard() {
 
   const fetchData = async () => {
     try {
-      const [s, p, u, c] = await Promise.all([
+      const [s, p, u, c, pkgRes] = await Promise.all([
         getStats(),
         getPending(),
         axios.get(`${API_BASE_URL}/api/auth/users`, { headers: authHeader }),
-        getCampaigns()
+        getCampaigns(),
+        getActivePackages()
       ]);
       setStats(s.data);
       setPending(p.data.pending || []);
       setUsers(u.data.users || []);
       setCampaigns(c.data.campaigns || []);
+      setActivePackages(pkgRes.data.packages || []);
     } catch {}
   };
 
   const showAlert = (msg, type = 'success') => {
     setAlert({ msg, type });
     setTimeout(() => setAlert(null), 5000);
+  };
+
+  // ── Package Handlers ───────────────────────────────────────
+  const handleAddPackageItem = () => {
+    setNewPackage(prev => ({
+      ...prev,
+      items: [...prev.items, { aid_type: 'MAIZE', unit: 'KG', amount: '' }]
+    }));
+  };
+
+  const handleRemovePackageItem = (index) => {
+    setNewPackage(prev => {
+      const updated = [...prev.items];
+      updated.splice(index, 1);
+      return { ...prev, items: updated };
+    });
+  };
+
+  const handlePackageItemChange = (index, field, value) => {
+    setNewPackage(prev => {
+      const updated = [...prev.items];
+      updated[index][field] = value;
+      return { ...prev, items: updated };
+    });
+  };
+
+  const handleCreatePackage = async () => {
+    if (!newPackage.location.trim()) {
+      showAlert('Location is required', 'error');
+      return;
+    }
+    if (newPackage.items.length === 0) {
+      showAlert('At least one item is required', 'error');
+      return;
+    }
+    for (let i = 0; i < newPackage.items.length; i++) {
+      const item = newPackage.items[i];
+      if (!item.aid_type || !item.unit || !item.amount || Number(item.amount) <= 0) {
+        showAlert(`Invalid item details at row ${i + 1}`, 'error');
+        return;
+      }
+    }
+    setPackageLoading(true);
+    try {
+      const payload = {
+        cycle_id: stats.current_cycle ? String(stats.current_cycle) : "1",
+        location: newPackage.location.trim(),
+        items: newPackage.items.map(item => ({
+          aid_type: item.aid_type.trim().toUpperCase(),
+          unit: item.unit.trim().toUpperCase(),
+          amount: Number(item.amount)
+        })),
+        officer_id: name || "admin"
+      };
+      await createAidPackage(payload);
+      showAlert(`✓ Aid Package created for ${payload.location}`);
+      setNewPackage({ location:'', items: [{ aid_type: 'MAIZE', unit: 'KG', amount: '' }] });
+      fetchData();
+    } catch (e) {
+      showAlert(e.response?.data?.error || 'Failed to create package', 'error');
+    }
+    setPackageLoading(false);
+  };
+
+  const handleDeletePackage = async (pkg) => {
+    if (!window.confirm(`Delete package for "${pkg.location || 'All Locations'}"?\n\nThis will deactivate the package and prevent NGO officers from selecting it for new sessions.`)) return;
+    try {
+      await deleteAidPackage(pkg.id);
+      showAlert(`✓ Package deleted`);
+      fetchData();
+    } catch (e) {
+      showAlert(e.response?.data?.error || 'Failed to delete package', 'error');
+    }
   };
 
   // ── Format timestamp ───────────────────────────────────────
@@ -334,12 +415,40 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* ── Alert ── */}
+      {/* ── Alert (Toast) ── */}
       {alert && (
-        <div className={`alert alert-${alert.type}`} style={{ marginTop:'16px' }}>
-          {alert.msg}
+        <div 
+          className={`alert alert-${alert.type}`} 
+          style={{ 
+            position: 'fixed', 
+            top: '24px', 
+            right: '24px', 
+            zIndex: 9999,
+            minWidth: '300px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            margin: 0,
+            animation: 'slideIn 0.3s ease-out'
+          }}
+        >
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span>{alert.msg}</span>
+            <button 
+              onClick={() => setAlert(null)}
+              style={{ background:'none', border:'none', color:'inherit', cursor:'pointer', marginLeft:'12px', fontWeight:700 }}
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
+
+      {/* Add toast animation style */}
+      <style>{`
+        @keyframes slideIn {
+          from { transform: translateX(100%); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+      `}</style>
 
       {/* ── Hint ── */}
       <div style={{
@@ -674,6 +783,131 @@ export default function AdminDashboard() {
                   <tr>
                     <td colSpan={8} style={{ textAlign:'center', color:'#a0aec0', padding:'24px' }}>
                       No campaigns available yet
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Aid Package Management */}
+      <div className="card">
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
+          <h3 style={{ margin:0, padding:0, borderBottom:'none' }}>📦 Aid Package Management</h3>
+        </div>
+        
+        <div style={{ display:'grid', gap:'16px', background:'#f7fafc', padding:'16px', borderRadius:'8px', border:'1px solid #e2e8f0' }}>
+          <div className="form-group" style={{ maxWidth: '300px' }}>
+            <label style={{ fontWeight: 700 }}>Target Location (e.g. Ward 5)</label>
+            <input 
+              placeholder="Leave empty for all locations"
+              value={newPackage.location}
+              style={inputStyle(false)}
+              onChange={e => setNewPackage({...newPackage, location: e.target.value})}
+            />
+          </div>
+
+          <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '12px' }}>
+            <label style={{ fontWeight: 700, marginBottom: '8px', display: 'block' }}>Package Items</label>
+            {newPackage.items.map((item, index) => (
+              <div key={index} style={{ display:'flex', gap:'12px', alignItems:'center', marginBottom:'12px' }}>
+                <span style={{ fontWeight: 700, color: '#718096', width: '20px' }}>#{index + 1}</span>
+                <select 
+                  value={item.aid_type}
+                  style={inputStyle(false)}
+                  onChange={e => handlePackageItemChange(index, 'aid_type', e.target.value)}
+                >
+                  {['MAIZE','CASH','OIL','SEEDS','CLOTHES','FERTILISER','BLANKETS'].map(type => (
+                    <option key={type} value={type}>{type}</option>
+                  ))}
+                </select>
+                <select 
+                  value={item.unit}
+                  style={inputStyle(false)}
+                  onChange={e => handlePackageItemChange(index, 'unit', e.target.value)}
+                >
+                  {['KG','LITERS','USD','PACKS','ITEMS'].map(type => (
+                    <option key={type} value={type}>{type}</option>
+                  ))}
+                </select>
+                <input 
+                  type="number"
+                  placeholder="Amount"
+                  value={item.amount}
+                  style={inputStyle(false)}
+                  onChange={e => handlePackageItemChange(index, 'amount', e.target.value)}
+                />
+                {newPackage.items.length > 1 && (
+                  <button 
+                    onClick={() => handleRemovePackageItem(index)}
+                    style={{ background: '#fed7d7', color: '#c53030', border: 'none', borderRadius: '4px', padding: '8px', cursor: 'pointer', fontWeight: 700 }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            ))}
+            <button 
+              onClick={handleAddPackageItem}
+              style={{ background: '#ebf8ff', color: '#3182ce', border: '1px solid #90cdf4', borderRadius: '4px', padding: '6px 12px', cursor: 'pointer', fontWeight: 700, fontSize: '12px' }}
+            >
+              + Add Another Item
+            </button>
+          </div>
+
+          <button className="btn btn-primary" onClick={handleCreatePackage} disabled={packageLoading} style={{ marginTop: '8px' }}>
+            {packageLoading ? 'Creating package...' : '✓ Create Aid Package'}
+          </button>
+        </div>
+
+        <div style={{ marginTop:'24px' }}>
+          <div style={{ fontSize:'14px', fontWeight:700, marginBottom:'12px' }}>
+            Active Packages ({activePackages.length})
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Package ID</th>
+                  <th>Location</th>
+                  <th>Created</th>
+                  <th>Items Included</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activePackages.length > 0 ? activePackages.map(pkg => (
+                  <tr key={pkg.id}>
+                    <td style={{ fontFamily:'monospace', fontWeight:700, color:'#4a90d9' }}>
+                      #{pkg.id.substring(0, 8)}...
+                    </td>
+                    <td>{pkg.location || 'All Locations'}</td>
+                    <td style={{ fontSize:'12px', color:'#718096' }}>{pkg.created_at}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                        {pkg.items && pkg.items.map((it, idx) => (
+                          <span key={idx} style={{ background: '#edf2f7', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 600, color: '#4a5568' }}>
+                            {it.amount} {it.unit} {it.type || it.aid_type}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td>
+                      <button
+                        className="btn btn-red btn-sm"
+                        onClick={() => handleDeletePackage(pkg)}
+                        title={`Delete package for ${pkg.location || 'All Locations'}`}
+                      >
+                        🗑 Delete
+                      </button>
+                    </td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={5} style={{ textAlign:'center', color:'#a0aec0', padding:'24px' }}>
+                      No active packages available
                     </td>
                   </tr>
                 )}

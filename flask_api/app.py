@@ -67,16 +67,22 @@ from database import (
     log_enrollment_status,
     get_latest_enrollment_status,
     log_hardware_event,
-    get_recent_hardware_events
+    get_recent_hardware_events,
+    create_aid_package,
+    get_active_aid_packages,
+    delete_aid_package,
+    activate_distribution_session,
+    get_active_session,
+    close_old_sessions
 )
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app, origins=[
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://your-dashboard-domain.com"  # Replace with actual domain
-])
+CORS(app, 
+    origins=["http://localhost:3000", "http://127.0.0.1:3000", "https://your-dashboard-domain.com"],
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"]
+)
 
 JWT_SECRET = get_setting("JWT_SECRET", prefer="local")
 if not JWT_SECRET:
@@ -147,8 +153,8 @@ def generate_token(username, role):
     payload = {
         "sub": username,
         "role": role,
-        "iat": datetime.datetime.utcnow(),
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(seconds=JWT_EXP_DELTA_SECONDS)
+        "iat": datetime.datetime.now(datetime.timezone.utc),
+        "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=JWT_EXP_DELTA_SECONDS)
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return token
@@ -991,6 +997,14 @@ def distribute_batch():
                 "message": f"Beneficiary already received {aid_type} this cycle",
                 "aid_type": aid_type
             })
+            
+            # Log duplicate block for mobile visibility
+            log_hardware_event(
+                "DUPLICATE_BLOCKED",
+                f"Beneficiary {b_id} attempt for {aid_type} blocked (already received)",
+                data.get("device_id", "mobile"),
+                officer_id
+            )
             continue
             
         if campaign_id:
@@ -1016,6 +1030,18 @@ def distribute_batch():
                     "amount": amount,
                     "tx_hash": dist_result["tx_hash"]
                 })
+                
+                # Log individual item success for real-time mobile tracking
+                log_hardware_event(
+                    "AID_DISTRIBUTED",
+                    f"{aid_type} {amount} {aid_unit} distributed to beneficiary {b_id}",
+                    data.get("device_id", "mobile"),
+                    officer_id,
+                    f"Tx: {dist_result['tx_hash']} | Block: {dist_result.get('block', 'N/A')}"
+                )
+                
+                import time
+                time.sleep(2)
             else:
                 if campaign_id:
                     release_campaign_budget(campaign_id, amount)
@@ -1043,9 +1069,17 @@ def distribute_batch():
                 "cache_id": cached["id"]
             })
 
-    # Find if ANY item was distributed or cached
     any_success = any(r.get("success") for r in results)
     
+    # Log event for the batch
+    log_hardware_event(
+        "BATCH_DISTRIBUTION_PROCESSED" if any_success else "BATCH_DISTRIBUTION_FAILED",
+        f"Processed batch for beneficiary {b_id} ({len(items)} items)",
+        data.get("device_id", "mobile"),
+        officer_id,
+        f"Success items: {len([r for r in results if r.get('success')])}"
+    )
+
     if any_success:
         return jsonify(hardware_response(
             True,
@@ -1055,7 +1089,6 @@ def distribute_batch():
             results=results
         )), 200
     else:
-        # All failed or all blocked
         return jsonify(hardware_response(
             False,
             "BATCH_FAILED",
@@ -1063,6 +1096,69 @@ def distribute_batch():
             beneficiary_id=b_id,
             results=results
         )), 409
+
+
+# ================================================================
+#  PACKAGE AND SESSION ENDPOINTS
+# ================================================================
+
+@app.route("/api/packages/create", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def create_package():
+    data = request.get_json() or {}
+    cycle = get_current_cycle().get("cycle", "0")
+    location = data.get("location", "").strip()
+    items = data.get("items", [])
+    
+    if not location:
+        return jsonify({"error": "Location is required"}), 400
+        
+    result = create_aid_package(str(cycle), location, items)
+    return jsonify(result), 201 if result.get("success") else 400
+
+@app.route("/api/packages/active", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def get_active_packages():
+    location = request.args.get("location")
+    result = get_active_aid_packages(location)
+    return jsonify(result), 200
+
+@app.route("/api/packages/<package_id>", methods=["DELETE"])
+@require_auth(["ADMIN"])
+def remove_package(package_id):
+    result = delete_aid_package(package_id)
+    code = 200 if result.get("success") else 404
+    return jsonify(result), code
+
+@app.route("/api/sessions/activate", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def activate_session():
+    data = request.get_json() or {}
+    user = current_user()
+    officer_id = user["username"]
+    location = data.get("location", "").strip()
+    package_id = data.get("package_id", "").strip()
+    
+    if not location or not package_id:
+        return jsonify({"error": "Location and package_id are required"}), 400
+        
+    result = activate_distribution_session(officer_id, location, package_id)
+    return jsonify(result), 200 if result.get("success") else 400
+
+@app.route("/api/sessions/active", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def get_session():
+    user = current_user()
+    officer_id = user["username"]
+    result = get_active_session(officer_id)
+    return jsonify(result), 200 if result.get("success") else 404
+
+@app.route("/api/hardware/session", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def hardware_session():
+    # Hardware check for ANY running session
+    result = get_active_session()
+    return jsonify(result), 200 if result.get("success") else 404
 
 
 @app.route("/api/sync", methods=["POST"])
@@ -1227,7 +1323,7 @@ def hardware_ping():
         "success": True,
         "action": "HARDWARE_READY",
         "message": "Hardware API reachable",
-        "server_time": datetime.datetime.utcnow().isoformat() + "Z",
+        "server_time": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z",
         "blockchain_online": w3.is_connected(),
         "current_cycle": cycle.get("cycle", 0),
         "hardware_profile_ready": profile.get("success", False),
@@ -1664,6 +1760,26 @@ def get_enrollment_status_message():
 @app.route("/api/hardware/profile", methods=["GET"])
 @require_auth(["ADMIN", "NGO"])
 def hardware_profile():
+    # If there is an active session for this officer, return its details as the profile
+    user = current_user()
+    session_res = get_active_session(user["username"])
+    if session_res.get("success"):
+        session = session_res["session"]
+        pkg = session.get("package", {})
+        profile = {
+            "location": session["location"],
+            "officer_id": session["officer_id"],
+            "device_id": "aidchain-field-01",
+            "items": pkg.get("items", [])
+        }
+        return jsonify(hardware_response(
+            True,
+            "PROFILE_READY",
+            "Active session loaded",
+            profile=profile
+        )), 200
+
+    # Fallback to old hardware profile if no active session exists
     result = get_hardware_profile()
     if not result["success"]:
         return jsonify(hardware_response(
@@ -1770,13 +1886,16 @@ def stats():
     pending_txs   = get_pending()
     campaigns_res = list_campaigns()
 
+    active_session = get_active_session()
+    
     return jsonify({
         "blockchain_online"  : w3.is_connected(),
         "current_cycle"      : cycle.get("cycle", 0),
         "total_transactions" : total_tx.get("total", 0),
         "total_beneficiaries": total_benes.get("total", 0),
         "pending_cache"      : len(pending_txs),
-        "total_campaigns"    : len(campaigns_res.get("campaigns", []))
+        "total_campaigns"    : len(campaigns_res.get("campaigns", [])),
+        "active_session"     : active_session if active_session.get("success") else None
     }), 200
 
 
@@ -1795,6 +1914,21 @@ def get_hardware_events():
         return jsonify({"error": result["error"]}), 500
 
     return jsonify({"events": result["events"]}), 200
+
+@app.route("/api/hardware/events", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def log_event():
+    data = request.get_json() or {}
+    event_type = data.get("event_type", "UNKNOWN")
+    message = data.get("message", "")
+    device_id = data.get("device_id", "unknown")
+    details = data.get("details", "")
+    
+    user = current_user()
+    officer_id = user["username"]
+    
+    log_hardware_event(event_type, message, device_id, officer_id, details)
+    return jsonify({"success": True}), 200
 
 
 if __name__ == "__main__":
