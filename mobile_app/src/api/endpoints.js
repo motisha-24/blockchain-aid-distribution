@@ -75,3 +75,8 @@ export async function distributeBatch(payload) {
   const { data } = await client.post("/api/distribute/batch", payload);
   return data;
 }
+
+export async function fetchBeneficiaryStatus(bId) {
+  const { data } = await client.get(`/api/beneficiary/${bId}/status`);
+  return data;
+}

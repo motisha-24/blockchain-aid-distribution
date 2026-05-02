@@ -61,8 +61,7 @@ export function DataProvider({ children }) {
       setCycle(latest.cycle || { cycle: 0 });
       setProgress(latest.progress || null);
       setQueue(await getQueue());
-      const events = await getHardwareEvents(20); // Fetch last 20 events for mobile
-      setHardwareEvents(events.events || []);
+      setHardwareEvents(latest.events || []);
       setLastSyncAt(new Date().toISOString());
     } finally {
       setIsSyncing(false);

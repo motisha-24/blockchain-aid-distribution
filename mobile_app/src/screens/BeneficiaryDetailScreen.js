@@ -12,13 +12,14 @@ import {
 import StatusPill from "../components/StatusPill";
 import { AID_TYPES, AID_TYPE_UNIT_MAP } from "../constants/aidTypes";
 import { useData } from "../context/DataContext";
-import { getActiveSession, distributeBatch } from "../api/endpoints";
+import { getActiveSession, distributeBatch, fetchBeneficiaryStatus } from "../api/endpoints";
 
 export default function BeneficiaryDetailScreen({ route }) {
   const { beneficiary, status } = route.params;
   const { cycle } = useData();
   const [session, setSession] = useState(null);
   const [loadingSession, setLoadingSession] = useState(true);
+  const [realStatus, setRealStatus] = useState(status || "NOT_COLLECTED");
   const [submitting, setSubmitting] = useState(false);
 
   // Toggle for showing manual fallback when session is active
@@ -30,7 +31,25 @@ export default function BeneficiaryDetailScreen({ route }) {
 
   useEffect(() => {
     loadSession();
+    loadRealStatus();
   }, []);
+
+  async function loadRealStatus() {
+    try {
+      const res = await fetchBeneficiaryStatus(beneficiary.id);
+      if (res.success) {
+        // If they collected ANY aid type, mark as COLLECTED for the UI
+        const hasCollectedAnything = res.status && Object.values(res.status).some(s => s === true);
+        if (hasCollectedAnything) {
+          setRealStatus("COLLECTED");
+        } else {
+          setRealStatus("NOT_COLLECTED");
+        }
+      }
+    } catch (e) {
+      console.log("Failed to fetch real status", e);
+    }
+  }
 
   async function loadSession() {
     try {
@@ -235,7 +254,7 @@ export default function BeneficiaryDetailScreen({ route }) {
       {/* Beneficiary header */}
       <View style={styles.headerCard}>
         <Text style={styles.name}>#{beneficiary.id} {beneficiary.name}</Text>
-        <StatusPill label={status} />
+        <StatusPill label={realStatus} />
         <View style={styles.metaGrid}>
           <Text style={styles.meta}>🪪 {beneficiary.national_id}</Text>
           <Text style={styles.meta}>📞 {beneficiary.phone}</Text>
