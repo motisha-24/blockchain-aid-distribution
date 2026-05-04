@@ -14,6 +14,8 @@ import AdminDashboard    from './pages/AdminDashboard';
 import NGODashboard      from './pages/NGODashboard';
 import DonorDashboard    from './pages/DonorDashboard';
 import AuditorDashboard  from './pages/AuditorDashboard';
+import PrivacyPage      from './pages/PrivacyPage';
+import TermsPage        from './pages/TermsPage';
 
 // ── Layout wrapper — adds Navbar above every protected page ───
 function Layout({ children }) {
@@ -37,6 +39,10 @@ export default function App() {
 
         {/* Default — redirect root to login */}
         <Route path="/" element={<Navigate to="/login" replace/>}/>
+
+        {/* ── Info pages ────────────────────────────────── */}
+        <Route path="/privacy" element={<Layout><PrivacyPage/></Layout>}/>
+        <Route path="/terms" element={<Layout><TermsPage/></Layout>}/>
 
         {/* ── Admin only ─────────────────────────────────── */}
         <Route path="/admin" element={
