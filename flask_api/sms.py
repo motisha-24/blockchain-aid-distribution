@@ -1,13 +1,43 @@
-# ================================================================
-#  sms.py - Hardware SMS Audit Log
-#  Flask does not send beneficiary SMS. The ESP32 + SIM800L handle
-#  real delivery, while Flask stores log entries for dashboards.
-# ================================================================
-
 import datetime
+import requests
+import json
+from env_loader import get_setting
 
 SMS_LOG = []
 
+def trigger_simgate_sms(phone: str, message: str) -> dict:
+    """
+    Fallback function: Sends SMS via SimGate Cloud Gateway if hardware fails.
+    """
+    api_key = get_setting("SIMGATE_API_KEY")
+    device_id = get_setting("SIMGATE_DEVICE_ID")
+    endpoint = "https://api.simgate.app/v1/sms/send"
+
+    if not api_key or not device_id:
+        return {"success": False, "error": "SimGate credentials missing in .env"}
+
+    headers = {
+        "x-api-key": api_key,
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "deviceId": device_id,
+        "phoneNumber": phone,
+        "message": message
+    }
+
+    try:
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=15)
+        if response.status_code in [200, 201]:
+            log_sms_event(phone, message, status="SENT_VIA_GATEWAY", metadata={"gateway": "SimGate"})
+            return {"success": True, "message": "Sent via SimGate fallback"}
+        else:
+            log_sms_event(phone, message, status="GATEWAY_FAILED", metadata={"error": response.text})
+            return {"success": False, "error": response.text}
+    except Exception as e:
+        log_sms_event(phone, message, status="GATEWAY_ERROR", metadata={"error": str(e)})
+        return {"success": False, "error": str(e)}
 
 def log_sms_event(phone: str, message: str, status: str = "SENT",
                   metadata: dict | None = None) -> dict:

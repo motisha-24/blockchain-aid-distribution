@@ -165,6 +165,29 @@ def init_database():
         )
     """)
 
+    # GSM Module Status — updated by ESP32 heartbeat every few minutes
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS gsm_status (
+            id          INTEGER PRIMARY KEY CHECK (id = 1),
+            device_id   TEXT    NOT NULL DEFAULT '',
+            signal      INTEGER NOT NULL DEFAULT 0,
+            registered  INTEGER NOT NULL DEFAULT 0,
+            updated_at  TEXT    NOT NULL DEFAULT ''
+        )
+    """)
+
+    # SMS Queue — jobs created by server, picked up and sent by ESP32
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sms_queue (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone       TEXT    NOT NULL,
+            message     TEXT    NOT NULL,
+            status      TEXT    NOT NULL DEFAULT 'PENDING',
+            created_at  TEXT    NOT NULL,
+            sent_at     TEXT    DEFAULT ''
+        )
+    """)
+
     conn.commit()
 
     # ── Seed default users if table is empty ─────────────────
@@ -999,3 +1022,81 @@ def get_active_session(officer_id=None):
             session["package"] = None
             
     return {"success": True, "session": session}
+
+
+# ── GSM Status ────────────────────────────────────────────────
+def update_gsm_status(device_id: str, signal: int, registered: int) -> None:
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    conn.execute("""
+        INSERT INTO gsm_status (id, device_id, signal, registered, updated_at)
+        VALUES (1, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            device_id=excluded.device_id,
+            signal=excluded.signal,
+            registered=excluded.registered,
+            updated_at=excluded.updated_at
+    """, (device_id, signal, registered, now))
+    conn.commit()
+    conn.close()
+
+
+def get_gsm_status() -> dict:
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM gsm_status WHERE id = 1").fetchone()
+    conn.close()
+    if not row:
+        return {"online": False, "signal": 0, "registered": False}
+    data = dict(row)
+    # Consider GSM "online" if updated within last 6 minutes and registered
+    import datetime as dt
+    try:
+        last = dt.datetime.strptime(data["updated_at"], "%Y-%m-%d %H:%M:%S")
+        age_seconds = (dt.datetime.now() - last).total_seconds()
+        online = age_seconds < 360 and data["registered"] == 1 and data["signal"] > 0
+    except:
+        online = False
+    return {
+        "online": online,
+        "signal": data["signal"],
+        "registered": bool(data["registered"]),
+        "device_id": data["device_id"],
+        "updated_at": data["updated_at"]
+    }
+
+
+# ── SMS Queue ─────────────────────────────────────────────────
+def queue_sms(phone: str, message: str) -> dict:
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO sms_queue (phone, message, status, created_at)
+        VALUES (?, ?, 'PENDING', ?)
+    """, (phone, message, now))
+    conn.commit()
+    job_id = cursor.lastrowid
+    conn.close()
+    return {"success": True, "id": job_id}
+
+
+def get_pending_sms_job() -> dict:
+    conn = get_connection()
+    row = conn.execute("""
+        SELECT * FROM sms_queue WHERE status = 'PENDING'
+        ORDER BY id ASC LIMIT 1
+    """).fetchone()
+    conn.close()
+    if not row:
+        return {"success": False}
+    return {"success": True, "job": dict(row)}
+
+
+def mark_sms_job(job_id: int, status: str) -> None:
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_connection()
+    conn.execute("""
+        UPDATE sms_queue SET status = ?, sent_at = ? WHERE id = ?
+    """, (status, now, job_id))
+    conn.commit()
+    conn.close()

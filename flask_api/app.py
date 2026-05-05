@@ -74,7 +74,12 @@ from database import (
     delete_aid_package,
     activate_distribution_session,
     get_active_session,
-    close_old_sessions
+    close_old_sessions,
+    update_gsm_status,
+    get_gsm_status,
+    queue_sms,
+    get_pending_sms_job,
+    mark_sms_job
 )
 from flask_cors import CORS
 
@@ -1089,7 +1094,64 @@ def distribute_batch():
             })
 
     any_success = any(r.get("success") for r in results)
-    
+
+    # --- SMART SMS DISPATCH ---
+    # Works for ALL clients: ESP32, Mobile App, Web Dashboard
+    if any_success:
+        try:
+            bene_res = get_enrollment_request(b_id)
+            if not bene_res["success"]:
+                print(f"[SMS-WARN] Could not find enrollment record for beneficiary {b_id}")
+            else:
+                phone = bene_res["request"].get("phone", "")
+                name  = bene_res["request"].get("name", "Beneficiary")
+
+                if not phone:
+                    print(f"[SMS-WARN] No phone number for beneficiary {b_id}")
+                else:
+                    # Build SMS from original items list (not results) for reliability
+                    successful_items = [
+                        item for item, r in zip(items, results)
+                        if r.get("success")
+                    ]
+                    if not successful_items:
+                        successful_items = items[:1]
+
+                    # Build a single description covering ALL items
+                    item_parts = []
+                    for it in successful_items:
+                        aid_type_sms = str(it.get("aid_type", "Aid")).upper()
+                        aid_unit_sms = str(it.get("aid_unit", ""))
+                        amount_sms   = str(it.get("amount", ""))
+                        if aid_type_sms == "CASH":
+                            item_parts.append(f"USD {amount_sms}")
+                        else:
+                            item_parts.append(f"{amount_sms} {aid_unit_sms} of {aid_type_sms}")
+
+                    item_desc = ", ".join(item_parts)
+
+                    # Get tx ref safely
+                    success_result = next((r for r in results if r.get("success")), {})
+                    tx_ref = str(success_result.get("tx_hash") or success_result.get("cache_id") or "SUCCESS")[:12]
+
+                    sms_msg = f"Dear {name}, you received {item_desc}. Ref: {tx_ref}. AidChain Zimbabwe."
+                    print(f"[SMS] Building message: '{sms_msg}'")
+
+                    gsm = get_gsm_status()
+                    print(f"[SMS] GSM Status: online={gsm['online']} signal={gsm['signal']} registered={gsm['registered']}")
+
+                    if gsm["online"]:
+                        queue_sms(phone, sms_msg)
+                        print(f"[SMS] Queued for GSM hardware delivery to {phone}")
+                    else:
+                        from sms import trigger_simgate_sms
+                        result = trigger_simgate_sms(phone, sms_msg)
+                        print(f"[SMS] SimGate result: {result}")
+        except Exception as e:
+            import traceback
+            print(f"[SMS-ERROR] Smart dispatch failed: {str(e)}")
+            print(traceback.format_exc())
+
     # Log event for the batch
     log_hardware_event(
         "BATCH_DISTRIBUTION_PROCESSED" if any_success else "BATCH_DISTRIBUTION_FAILED",
@@ -1997,6 +2059,74 @@ def log_event():
     
     log_hardware_event(event_type, message, device_id, officer_id, details)
     return jsonify({"success": True}), 200
+
+
+@app.route("/api/sms/fallback", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def sms_fallback_trigger():
+    data = request.get_json() or {}
+    phone = data.get("phone")
+    message = data.get("message")
+    if not phone or not message:
+        return jsonify({"success": False, "error": "phone and message are required"}), 400
+    from sms import trigger_simgate_sms
+    result = trigger_simgate_sms(phone, message)
+    return jsonify(result), (200 if result["success"] else 500)
+
+
+@app.route("/api/hardware/gsm-status", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def report_gsm_status():
+    """ESP32 calls this every ~5 minutes to report its GSM signal."""
+    data = request.get_json() or {}
+    device_id  = data.get("device_id", "unknown")
+    signal     = int(data.get("signal", 0))
+    registered = int(data.get("registered", 0))
+    update_gsm_status(device_id, signal, registered)
+    return jsonify({"success": True, "message": "GSM status updated"}), 200
+
+
+@app.route("/api/hardware/sms-queue", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def poll_sms_queue():
+    """ESP32 polls this to check if the server has an SMS job for it to send."""
+    result = get_pending_sms_job()
+    if not result["success"]:
+        return jsonify({"pending": False}), 200
+    return jsonify({"pending": True, "job": result["job"]}), 200
+
+
+@app.route("/api/hardware/sms-queue/result", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def sms_queue_result():
+    """ESP32 reports back whether it successfully sent the queued SMS."""
+    data   = request.get_json() or {}
+    job_id = data.get("job_id")
+    sent   = data.get("sent", False)
+    if not job_id:
+        return jsonify({"success": False, "error": "job_id required"}), 400
+
+    if sent:
+        mark_sms_job(job_id, "SENT")
+    else:
+        # Hardware failed — immediately fall back to SimGate
+        job_res = get_pending_sms_job()
+        mark_sms_job(job_id, "HW_FAILED")
+        # Retry via gateway using data passed from ESP32
+        phone   = data.get("phone", "")
+        message = data.get("message", "")
+        if phone and message:
+            from sms import trigger_simgate_sms
+            trigger_simgate_sms(phone, message)
+            print(f"[SMS] HW failed. SimGate fallback triggered for {phone}")
+    return jsonify({"success": True}), 200
+
+
+@app.route("/api/hardware/gsm-status", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
+def get_gsm_status_route():
+    """Dashboard can call this to display GSM module health."""
+    return jsonify(get_gsm_status()), 200
 
 
 if __name__ == "__main__":

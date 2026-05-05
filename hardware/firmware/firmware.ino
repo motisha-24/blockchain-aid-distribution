@@ -88,6 +88,8 @@ unsigned long lastWifiReconnectMs = 0;
 unsigned long lastFingerHandledMs = 0;
 unsigned long lastEnrollmentPollMs = 0;
 unsigned long lastWifiStatusPrintMs = 0;
+unsigned long lastGsmHeartbeatMs = 0;   // NEW: tracks last GSM status report
+unsigned long lastSmsQueuePollMs = 0;   // NEW: tracks last SMS queue poll
 
 bool immediateFingerprintMode = false;
 int immediateBeneficiaryId = 0;
@@ -352,6 +354,34 @@ bool sendSmsViaSim800L(const String& phone, const String& message) {
   return response.indexOf("OK") >= 0 || response.indexOf("+CMGS") >= 0;
 }
 
+bool sendSmsViaFallback(const String& phone, const String& message) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[SMS-FALLBACK] WiFi offline. Cannot use gateway.");
+    return false;
+  }
+
+  Serial.println("[SMS-FALLBACK] Triggering SimGate Cloud Fallback...");
+  HTTPClient http;
+  http.begin(endpointUrl("/api/sms/fallback"));
+  if (!addJsonHeaders(http)) {
+    http.end();
+    return false;
+  }
+
+  DynamicJsonDocument doc(512);
+  doc["phone"] = phone;
+  doc["message"] = message;
+
+  String body;
+  serializeJson(doc, body);
+  int status = http.POST(body);
+  String response = http.getString();
+  http.end();
+
+  Serial.printf("[SMS-FALLBACK] Status: %d\n", status);
+  return (status == 200 || status == 201);
+}
+
 // ----------------------------------------------------------------
 // HTTP helpers
 // ----------------------------------------------------------------
@@ -386,6 +416,87 @@ void logHardwareEvent(const String& type, const String& message, const String& d
   serializeJson(doc, body);
   http.POST(body);
   http.end();
+}
+
+void reportGsmHeartbeat() {
+  if (WiFi.status() != WL_CONNECTED || JWT_TOKEN.length() == 0) return;
+
+  // Check signal and registration
+  String csq = "";
+  GsmSerial.println("AT+CSQ");
+  unsigned long t = millis();
+  while (millis() - t < 1000) {
+    while (GsmSerial.available()) csq += char(GsmSerial.read());
+  }
+  int signal = 0;
+  int idx = csq.indexOf("+CSQ:");
+  if (idx >= 0) signal = csq.substring(idx + 5).toInt();
+
+  String creg = "";
+  GsmSerial.println("AT+CREG?");
+  t = millis();
+  while (millis() - t < 1000) {
+    while (GsmSerial.available()) creg += char(GsmSerial.read());
+  }
+  int registered = (creg.indexOf(",1") >= 0 || creg.indexOf(",5") >= 0) ? 1 : 0;
+
+  HTTPClient http;
+  http.begin(endpointUrl("/api/hardware/gsm-status"));
+  if (!addJsonHeaders(http)) { http.end(); return; }
+
+  DynamicJsonDocument doc(256);
+  doc["device_id"]  = DEVICE_ID;
+  doc["signal"]     = signal;
+  doc["registered"] = registered;
+
+  String body;
+  serializeJson(doc, body);
+  int status = http.POST(body);
+  http.end();
+  Serial.printf("[GSM-HEARTBEAT] signal=%d registered=%d -> HTTP %d\n", signal, registered, status);
+}
+
+void pollAndSendSmsQueue() {
+  if (WiFi.status() != WL_CONNECTED || JWT_TOKEN.length() == 0) return;
+
+  HTTPClient http;
+  http.begin(endpointUrl("/api/hardware/sms-queue"));
+  if (!addJsonHeaders(http)) { http.end(); return; }
+  int status = http.GET();
+  String body = http.getString();
+  http.end();
+
+  if (status != 200) return;
+
+  DynamicJsonDocument doc(512);
+  if (deserializeJson(doc, body)) return;
+  if (!doc["pending"].as<bool>()) return;
+
+  JsonObject job = doc["job"];
+  int jobId = job["id"] | 0;
+  String phone   = String((const char*)(job["phone"] | ""));
+  String message = String((const char*)(job["message"] | ""));
+  if (jobId == 0 || phone.length() == 0) return;
+
+  Serial.printf("[SMS-QUEUE] Job %d -> %s\n", jobId, phone.c_str());
+  bool sent = sendSmsViaSim800L(phone, message);
+
+  // Report result back to server
+  HTTPClient http2;
+  http2.begin(endpointUrl("/api/hardware/sms-queue/result"));
+  if (!addJsonHeaders(http2)) { http2.end(); return; }
+
+  DynamicJsonDocument res(512);
+  res["job_id"]  = jobId;
+  res["sent"]    = sent;
+  res["phone"]   = phone;
+  res["message"] = message;
+
+  String resBody;
+  serializeJson(res, resBody);
+  http2.POST(resBody);
+  http2.end();
+  Serial.printf("[SMS-QUEUE] Result: %s\n", sent ? "SENT" : "FAILED->FALLBACK");
 }
 
 
@@ -927,8 +1038,24 @@ void handleSuccessfulDistribution(int beneficiaryId, const String& txReference) 
     Serial.println("[SMS] Beneficiary SMS sent via SIM800L.");
     logHardwareEvent("SMS_SENT", "SMS confirmation sent to " + info.phone);
   } else {
-    Serial.println("[SMS] SMS send failed on SIM800L.");
-    logHardwareEvent("SMS_FAILED", "Failed to send SMS to " + info.phone);
+    Serial.println("[SMS] Hardware failed. Attempting cloud fallback...");
+    bool fallbackSent = sendSmsViaFallback(info.phone, smsMessage);
+    
+    reportSmsLog(
+      beneficiaryId,
+      info.phone,
+      smsMessage,
+      txReference,
+      fallbackSent ? "SENT_VIA_GATEWAY" : "TOTAL_FAILURE"
+    );
+
+    if (fallbackSent) {
+      Serial.println("[SMS] Success: SMS sent via Cloud Gateway fallback.");
+      logHardwareEvent("SMS_FALLBACK_SUCCESS", "Hardware failed but cloud fallback succeeded for " + info.phone);
+    } else {
+      Serial.println("[SMS] CRITICAL: Both hardware and cloud fallback failed.");
+      logHardwareEvent("SMS_CRITICAL_FAILURE", "Failed both GSM and Cloud Gateway for " + info.phone);
+    }
   }
 
 }
@@ -1375,9 +1502,23 @@ void loop() {
   } else if (strcmp(SYSTEM_MODE, "DISTRIBUTE") == 0) {
     // Periodically refresh session/profile
     if (WiFi.status() == WL_CONNECTED &&
-        millis() - lastEnrollmentPollMs >= 30000) { // Reuse poll timer for profile refresh
+        millis() - lastEnrollmentPollMs >= 30000) {
       lastEnrollmentPollMs = millis();
       fetchHardwareProfile();
+    }
+
+    // Report GSM heartbeat every 5 minutes
+    if (WiFi.status() == WL_CONNECTED &&
+        millis() - lastGsmHeartbeatMs >= 300000) {
+      lastGsmHeartbeatMs = millis();
+      reportGsmHeartbeat();
+    }
+
+    // Poll SMS queue every 10 seconds
+    if (WiFi.status() == WL_CONNECTED &&
+        millis() - lastSmsQueuePollMs >= 10000) {
+      lastSmsQueuePollMs = millis();
+      pollAndSendSmsQueue();
     }
 
     // Distribution mode: continuously scan for fingerprints

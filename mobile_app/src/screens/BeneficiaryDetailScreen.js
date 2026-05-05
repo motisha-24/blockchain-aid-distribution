@@ -127,7 +127,8 @@ export default function BeneficiaryDetailScreen({ route }) {
         verification_mode: usingSession ? "SESSION" : "MANUAL",
         note: usingSession
           ? `Session package distribution — Cycle ${cycle?.cycle || 0}`
-          : `Manual fallback — Cycle ${cycle?.cycle || 0}`
+          : `Manual fallback — Cycle ${cycle?.cycle || 0}`,
+        notify_via_gateway: true // Use server-side cloud SMS since mobile has no GSM hardware
       };
 
       const res = await distributeBatch(payload);
