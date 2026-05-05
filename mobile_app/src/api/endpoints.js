@@ -30,8 +30,9 @@ export async function fetchPendingCache() {
   return data;
 }
 
-export async function fetchCycleProgress() {
-  const { data } = await client.get("/api/cycle/progress");
+export async function fetchCycleProgress(cycle = null) {
+  const params = cycle !== null ? { cycle } : {};
+  const { data } = await client.get("/api/cycle/progress", { params });
   return data;
 }
 

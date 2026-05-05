@@ -139,6 +139,8 @@ def init_database():
         cursor.execute("ALTER TABLE hardware_events ADD COLUMN timestamp TEXT NOT NULL DEFAULT ''")
     if 'details' not in existing_columns:
         cursor.execute("ALTER TABLE hardware_events ADD COLUMN details TEXT DEFAULT ''")
+    if 'cycle' not in existing_columns:
+        cursor.execute("ALTER TABLE hardware_events ADD COLUMN cycle INTEGER NOT NULL DEFAULT 0")
 
     # New Aid Distribution Schema
     cursor.execute("""
@@ -829,19 +831,18 @@ def delete_user_db(username):
 
 
 # ── Hardware Events Logging ───────────────────────────────────
-def log_hardware_event(event_type, message, device_id, officer_id, details=""):
+def log_hardware_event(event_type, message, device_id, officer_id, details="", cycle=0):
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO hardware_events
-        (event_type, message, device_id, officer_id, timestamp, details, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (event_type, message, device_id, officer_id, timestamp, details, cycle, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         event_type.strip(), message.strip(), device_id.strip(),
-        officer_id.strip(), now, details.strip(), now
+        officer_id.strip(), now, details.strip(), int(cycle), now
     ))
-
 
     conn.commit()
     conn.close()

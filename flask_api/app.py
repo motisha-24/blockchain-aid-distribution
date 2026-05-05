@@ -987,6 +987,9 @@ def distribute_batch():
 
     results = []
     
+    # Get the current cycle number for stamping events
+    current_cycle_num = get_current_cycle().get("cycle", 0)
+
     # Get the current nonce for the account to handle batching
     current_nonce = None
     if w3.is_connected():
@@ -1061,7 +1064,8 @@ def distribute_batch():
                     f"{aid_type} {amount} {aid_unit} distributed to beneficiary {b_id}",
                     data.get("device_id", "mobile"),
                     officer_id,
-                    f"Tx: {dist_result['tx_hash']} | Nonce: {current_nonce-1} | Block: {dist_result.get('block', 'N/A')}"
+                    f"Tx: {dist_result['tx_hash']} | Nonce: {current_nonce-1} | Block: {dist_result.get('block', 'N/A')}",
+                    cycle=current_cycle_num
                 )
                 
                 import time
@@ -1346,28 +1350,31 @@ def current_cycle():
 @require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def get_cycle_progress():
     # 1. Get global stats from blockchain
-    total_tx = get_total_transactions().get("total", 0)
+    total_tx   = get_total_transactions().get("total", 0)
     cycle_info = get_current_cycle()
-    total_b = get_total_beneficiaries().get("total", 0)
-    
-    # 2. Get collectors from hardware events (most efficient way)
-    conn = get_connection()
+    total_b    = get_total_beneficiaries().get("total", 0)
+    current_cycle_num = cycle_info.get("cycle", 0)
+
+    # Allow querying a specific past cycle via ?cycle=N, defaults to current
+    query_cycle = request.args.get("cycle", current_cycle_num, type=int)
+
+    # 2. Get collectors filtered by the requested cycle number
+    conn   = get_connection()
     cursor = conn.cursor()
-    # We look for all unique beneficiaries who have an AID_DISTRIBUTED event
     cursor.execute("""
-        SELECT DISTINCT message 
-        FROM hardware_events 
+        SELECT DISTINCT message
+        FROM hardware_events
         WHERE event_type = 'AID_DISTRIBUTED'
-    """)
+          AND cycle = ?
+    """, (query_cycle,))
     rows = cursor.fetchall()
     conn.close()
-    
+
     beneficiaries_detail = []
     seen_ids = set()
-    
+
     for row in rows:
         msg = row[0]
-        # Regex to extract ID from message: "... distributed to beneficiary 1003"
         match = re.search(r'beneficiary\s+(\d+)', msg, re.IGNORECASE)
         if match:
             try:
@@ -1380,14 +1387,15 @@ def get_cycle_progress():
                     })
             except:
                 continue
-    
+
     return jsonify({
-        "cycle": cycle_info.get("cycle", 0),
-        "total_beneficiaries": total_b,
+        "cycle":                  query_cycle,
+        "current_cycle":          current_cycle_num,
+        "total_beneficiaries":    total_b,
         "confirmed_on_blockchain": total_tx,
-        "total_distributed": len(beneficiaries_detail),
-        "not_yet_distributed": max(0, total_b - len(beneficiaries_detail)),
-        "beneficiaries_detail": beneficiaries_detail
+        "total_distributed":      len(beneficiaries_detail),
+        "not_yet_distributed":    max(0, total_b - len(beneficiaries_detail)),
+        "beneficiaries_detail":   beneficiaries_detail
     }), 200
 
 

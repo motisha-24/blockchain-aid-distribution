@@ -43,7 +43,9 @@ export async function refreshServerSnapshot() {
 
   let progress;
   try {
-    progress = await fetchCycleProgress();
+    // Pass the current cycle number so the server filters correctly
+    const cycleNum = cycle?.cycle ?? 0;
+    progress = await fetchCycleProgress(cycleNum);
   } catch {
     const [stats, pending] = await Promise.all([
       fetchSystemStats(),
