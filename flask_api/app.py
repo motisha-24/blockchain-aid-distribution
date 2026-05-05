@@ -63,6 +63,7 @@ from database import (
     get_enrollment_request,
     list_enrollment_requests,
     get_next_pending_enrollment,
+    get_connection,
     update_enrollment_status,
     log_enrollment_status,
     get_latest_enrollment_status,
@@ -1277,6 +1278,55 @@ def distribution_history():
 @require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def current_cycle():
     return jsonify(get_current_cycle()), 200
+
+
+@app.route("/api/cycle/progress", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
+def get_cycle_progress():
+    # 1. Get global stats from blockchain
+    total_tx = get_total_transactions().get("total", 0)
+    cycle_info = get_current_cycle()
+    total_b = get_total_beneficiaries().get("total", 0)
+    
+    # 2. Get collectors from hardware events (most efficient way)
+    conn = get_connection()
+    cursor = conn.cursor()
+    # We look for all unique beneficiaries who have an AID_DISTRIBUTED event
+    cursor.execute("""
+        SELECT DISTINCT message 
+        FROM hardware_events 
+        WHERE event_type = 'AID_DISTRIBUTED'
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    beneficiaries_detail = []
+    seen_ids = set()
+    
+    for row in rows:
+        msg = row[0]
+        # Regex to extract ID from message: "... distributed to beneficiary 1003"
+        match = re.search(r'beneficiary\s+(\d+)', msg, re.IGNORECASE)
+        if match:
+            try:
+                b_id = int(match.group(1))
+                if b_id not in seen_ids:
+                    seen_ids.add(b_id)
+                    beneficiaries_detail.append({
+                        "id": b_id,
+                        "status": "COLLECTED"
+                    })
+            except:
+                continue
+    
+    return jsonify({
+        "cycle": cycle_info.get("cycle", 0),
+        "total_beneficiaries": total_b,
+        "confirmed_on_blockchain": total_tx,
+        "total_distributed": len(beneficiaries_detail),
+        "not_yet_distributed": max(0, total_b - len(beneficiaries_detail)),
+        "beneficiaries_detail": beneficiaries_detail
+    }), 200
 
 
 @app.route("/api/cycle/advance", methods=["POST"])

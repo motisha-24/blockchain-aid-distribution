@@ -56,10 +56,11 @@ export async function refreshServerSnapshot() {
     const seen = new Set();
     
     (events || []).forEach(evt => {
-      if (evt.event_type === "AID_DISTRIBUTED") {
-        const match = evt.message.match(/beneficiary (\d+)/);
+      const type = evt.event_type || evt.type;
+      if (type === "AID_DISTRIBUTED") {
+        const match = evt.message.match(/beneficiary\s+(\d+)/i);
         if (match) {
-          const bId = parseInt(match[1]);
+          const bId = match[1];
           if (!seen.has(bId)) {
             seen.add(bId);
             detailList.push({ id: bId, status: "COLLECTED" });

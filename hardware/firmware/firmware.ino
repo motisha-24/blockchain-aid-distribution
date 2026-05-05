@@ -41,7 +41,7 @@ String JWT_TOKEN = "";
 // Change this before uploading
 // "REGISTER" = registration mode
 // "DISTRIBUTE" = distribution mode
-#define SYSTEM_MODE "REGISTER"
+#define SYSTEM_MODE "DISTRIBUTE"
 
 String DEVICE_ID = (SYSTEM_MODE == "REGISTER") ? "aidchain-registration-01" : "aidchain-distribution-01";
 String OFFICER_ID = "ngo_officer";

@@ -14,21 +14,39 @@ function resolveStatus(beneficiary, detailMap) {
   if (beneficiary.active === false) {
     return "DEACTIVATED";
   }
-  return detailMap.get(beneficiary.id)?.status || "NOT_COLLECTED";
+  // Use string keys for robustness
+  return detailMap.get(String(beneficiary.id))?.status || "NOT_COLLECTED";
 }
 
 export default function BeneficiariesScreen({ navigation }) {
-  const { beneficiaries, progress } = useData();
+  const { beneficiaries, progress, hardwareEvents } = useData();
   const [query, setQuery] = useState("");
 
   const detailMap = useMemo(() => {
     const map = new Map();
+    
+    // 1. Initialize from hardware events (most recent truth for mobile)
+    (hardwareEvents || []).forEach(evt => {
+      // Support both event_type and type (for robustness)
+      const type = evt.event_type || evt.type;
+      if (type === "AID_DISTRIBUTED") {
+        // More flexible regex to catch various message formats
+        const match = evt.message.match(/beneficiary\s+(\d+)/i);
+        if (match) {
+          const bId = match[1]; // Keep as string for map key
+          map.set(String(bId), { status: "COLLECTED" });
+        }
+      }
+    });
+
+    // 2. Overwrite/Supplement with explicit progress data from server
     const list = progress?.beneficiaries_detail || [];
     list.forEach((item) => {
-      map.set(item.id, item);
+      map.set(String(item.id), item);
     });
+    
     return map;
-  }, [progress]);
+  }, [progress, hardwareEvents]);
 
   const filtered = useMemo(() => {
     if (!query.trim()) {
