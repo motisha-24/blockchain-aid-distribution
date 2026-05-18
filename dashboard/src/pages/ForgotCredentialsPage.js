@@ -15,6 +15,7 @@ export default function ForgotCredentialsPage() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const cardStyle = {
     background: '#fff',
@@ -65,6 +66,18 @@ export default function ForgotCredentialsPage() {
     setLoading(true);
     setError('');
     setMessage('');
+
+    if (passwordForm.new_password.length < 8) {
+      setLoading(false);
+      setError('Password must be at least 8 characters');
+      return;
+    }
+
+    if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,}$/.test(passwordForm.new_password)) {
+      setLoading(false);
+      setError('Password must include uppercase, lowercase, number, and special character');
+      return;
+    }
 
     if (passwordForm.new_password !== passwordForm.confirm_password) {
       setLoading(false);
@@ -216,24 +229,48 @@ export default function ForgotCredentialsPage() {
 
             <div style={{ marginBottom: '14px' }}>
               <label style={labelStyle}>New Password</label>
-              <input
-                type="password"
-                value={passwordForm.new_password}
-                onChange={e => setPasswordForm({ ...passwordForm, new_password: e.target.value })}
-                style={inputStyle}
-                placeholder="Minimum 8 characters"
-              />
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={passwordForm.new_password}
+                  onChange={e => setPasswordForm({ ...passwordForm, new_password: e.target.value })}
+                  style={{ ...inputStyle, paddingRight: '44px' }}
+                  placeholder="Minimum 8 characters"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  style={{
+                    position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
+                    background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', color: '#475569'
+                  }}
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
             </div>
 
             <div style={{ marginBottom: '18px' }}>
               <label style={labelStyle}>Confirm Password</label>
-              <input
-                type="password"
-                value={passwordForm.confirm_password}
-                onChange={e => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })}
-                style={inputStyle}
-                placeholder="Re-enter new password"
-              />
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={passwordForm.confirm_password}
+                  onChange={e => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })}
+                  style={{ ...inputStyle, paddingRight: '44px' }}
+                  placeholder="Re-enter new password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  style={{
+                    position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
+                    background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', color: '#475569'
+                  }}
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
             </div>
 
             <button

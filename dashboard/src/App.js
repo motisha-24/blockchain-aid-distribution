@@ -16,6 +16,7 @@ import DonorDashboard    from './pages/DonorDashboard';
 import AuditorDashboard  from './pages/AuditorDashboard';
 import PrivacyPage      from './pages/PrivacyPage';
 import TermsPage        from './pages/TermsPage';
+import SecurityAuditPage from './pages/SecurityAuditPage';
 
 // ── Layout wrapper — adds Navbar above every protected page ───
 function Layout({ children }) {
@@ -69,6 +70,13 @@ export default function App() {
         <Route path="/auditor" element={
           <ProtectedRoute allowedRoles={['AUDITOR', 'ADMIN']}>
             <Layout><AuditorDashboard/></Layout>
+          </ProtectedRoute>
+        }/>
+
+        {/* ── Security Operations & Threat Intel — Admin & Auditor ── */}
+        <Route path="/security" element={
+          <ProtectedRoute allowedRoles={['ADMIN', 'AUDITOR']}>
+            <Layout><SecurityAuditPage/></Layout>
           </ProtectedRoute>
         }/>
 

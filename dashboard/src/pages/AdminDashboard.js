@@ -12,7 +12,8 @@ import {
   getPending, syncCache,
   getAllBeneficiaries, getDistributionHistory,
   getCampaigns, createCampaign,
-  getActivePackages, createAidPackage, deleteAidPackage
+  getActivePackages, createAidPackage, deleteAidPackage,
+  getHardwareEvents
 } from '../services/api';
 import axios from 'axios';
 
@@ -39,6 +40,7 @@ export default function AdminDashboard() {
   const [newUser,         setNewUser]         = useState({ username:'', password:'', role:'NGO', name:'', email:'' });
   const [newUserErrors,   setNewUserErrors]   = useState({});
   const [showForm,        setShowForm]        = useState(false);
+  const [showPassword,    setShowPassword]    = useState(false);
   const [newCampaign,     setNewCampaign]     = useState({ name:'', donor_label:'', aid_type:'MAIZE', budget_total:'' });
   const [newCampaignErrors,setNewCampaignErrors]= useState({});
 
@@ -53,6 +55,9 @@ export default function AdminDashboard() {
 
   const [modalLoading, setModalLoading] = useState(false);
 
+  // ── Events Log ──────────────────────────────────────────────
+  const [events, setEvents] = useState([]);
+
   const token      = localStorage.getItem('token');
   const name       = localStorage.getItem('name');
   const authHeader = { Authorization: `Bearer ${token}` };
@@ -65,18 +70,20 @@ export default function AdminDashboard() {
 
   const fetchData = async () => {
     try {
-      const [s, p, u, c, pkgRes] = await Promise.all([
+      const [s, p, u, c, pkgRes, evRes] = await Promise.all([
         getStats(),
         getPending(),
         axios.get(`${API_BASE_URL}/api/auth/users`, { headers: authHeader }),
         getCampaigns(),
-        getActivePackages()
+        getActivePackages(),
+        getHardwareEvents(30)
       ]);
       setStats(s.data);
       setPending(p.data.pending || []);
       setUsers(u.data.users || []);
       setCampaigns(c.data.campaigns || []);
       setActivePackages(pkgRes.data.packages || []);
+      setEvents(evRes.data.events || []);
     } catch {}
   };
 
@@ -239,12 +246,22 @@ export default function AdminDashboard() {
       errs.username = "Username must be at least 3 characters";
     if (!/^[a-zA-Z0-9_]+$/.test(newUser.username.trim()))
       errs.username = "Letters, numbers and underscores only";
-    if (!newUser.password || newUser.password.length < 8)
+    if (!newUser.password) {
+      errs.password = "Password is required";
+    } else if (newUser.password.length < 8) {
       errs.password = "Password must be at least 8 characters";
+    } else if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,}$/.test(newUser.password)) {
+      errs.password = "Must include uppercase, lowercase, number, and special character";
+    }
+    
     if (!newUser.name.trim() || newUser.name.trim().length < 2)
       errs.name = "Full name must be at least 2 characters";
-    if (newUser.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newUser.email))
-      errs.email = "Enter a valid email address";
+      
+    if (newUser.email) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newUser.email)) {
+        errs.email = "Enter a valid email address";
+      }
+    }
     return errs;
   };
 
@@ -417,19 +434,7 @@ export default function AdminDashboard() {
 
       {/* ── Alert (Toast) ── */}
       {alert && (
-        <div 
-          className={`alert alert-${alert.type}`} 
-          style={{ 
-            position: 'fixed', 
-            top: '24px', 
-            right: '24px', 
-            zIndex: 9999,
-            minWidth: '300px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-            margin: 0,
-            animation: 'slideIn 0.3s ease-out'
-          }}
-        >
+        <div className={`alert alert-${alert.type}`}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
             <span>{alert.msg}</span>
             <button 
@@ -442,13 +447,6 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {/* Add toast animation style */}
-      <style>{`
-        @keyframes slideIn {
-          from { transform: translateX(100%); opacity: 0; }
-          to { transform: translateX(0); opacity: 1; }
-        }
-      `}</style>
 
       {/* ── Hint ── */}
       <div style={{
@@ -570,11 +568,23 @@ export default function AdminDashboard() {
               </div>
               <div className="form-group">
                 <label>Password * (min 8 chars)</label>
-                <input type="password" placeholder="Minimum 8 characters"
-                  value={newUser.password}
-                  style={inputStyle(newUserErrors.password)}
-                  onChange={e => { setNewUser({...newUser, password: e.target.value});
-                    setNewUserErrors({...newUserErrors, password:''}); }}/>
+                <div style={{ position: 'relative' }}>
+                  <input type={showPassword ? "text" : "password"} placeholder="Minimum 8 characters"
+                    value={newUser.password}
+                    style={{ ...inputStyle(newUserErrors.password), width: '100%', paddingRight: '44px' }}
+                    onChange={e => { setNewUser({...newUser, password: e.target.value});
+                      setNewUserErrors({...newUserErrors, password:''}); }}/>
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    style={{
+                      position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
+                      background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', color: '#475569'
+                    }}
+                  >
+                    {showPassword ? 'Hide' : 'Show'}
+                  </button>
+                </div>
                 {newUserErrors.password && <div style={errStyle}>⚠ {newUserErrors.password}</div>}
               </div>
               <div className="form-group">
@@ -937,6 +947,116 @@ export default function AdminDashboard() {
             <span style={{ fontWeight:700, color:'#2d3748' }}>{value}</span>
           </div>
         ))}
+      </div>
+
+      {/* Security Operations Summary Panel */}
+      <div className="card" style={{ gridColumn: 'span 2', background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(20, 30, 55, 0.95) 100%)', color: '#f8fafc', border: '1px solid rgba(255,255,255,0.08)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '15px' }}>
+          <div>
+            <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              🛡️ Security & Threat Intelligence Desk
+            </h3>
+            <p style={{ margin: '6px 0 0 0', fontSize: '13px', color: '#94a3b8', maxWidth: '650px' }}>
+              Automated rule-based security scanners inspect physical terminal handshake handshakes, fingerprint bypass triggers, and ledger blocks.
+            </p>
+          </div>
+          <a
+            href="/security"
+            style={{
+              padding: '10px 18px',
+              borderRadius: '999px',
+              background: 'rgba(255, 255, 255, 0.08)',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              color: '#f8fafc',
+              fontSize: '12px',
+              fontWeight: 800,
+              textDecoration: 'none',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              transition: 'all 0.2s ease-in-out'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(255,255,255,0.15)';
+              e.currentTarget.style.transform = 'translateY(-1px)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+              e.currentTarget.style.transform = 'none';
+            }}
+          >
+            Open Threat Panel ↗
+          </a>
+        </div>
+
+        <div style={{
+          marginTop: '20px',
+          background: 'rgba(9, 13, 22, 0.5)',
+          borderRadius: '10px',
+          border: '1px solid rgba(255,255,255,0.06)',
+          padding: '16px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '15px'
+        }}>
+          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '10px', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Monitored Logs
+              </div>
+              <div style={{ fontSize: '20px', fontWeight: 900, color: '#f8fafc', marginTop: '2px' }}>
+                {events.length} Events
+              </div>
+            </div>
+            <div style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '20px' }}>
+              <div style={{ fontSize: '10px', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Rule Threat Scans
+              </div>
+              <div style={{ fontSize: '20px', fontWeight: 900, color: '#10b981', marginTop: '2px' }}>
+                4 Active Rules
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {events.some(ev => ev.event_type.includes('FAIL') || ev.event_type.includes('ERROR') || ev.event_type.includes('MISMATCH')) ? (
+              <div style={{
+                background: 'rgba(249, 115, 22, 0.12)',
+                border: '1px solid rgba(249, 115, 22, 0.25)',
+                color: '#ff9800',
+                padding: '6px 14px',
+                borderRadius: '8px',
+                fontSize: '12px',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <span className="pulse-orange" style={{ width: '8px', height: '8px', background: '#ff9800', borderRadius: '50%' }} />
+                ⚠️ Suspicious Testing Anomalies Logged
+              </div>
+            ) : (
+              <div style={{
+                background: 'rgba(16, 185, 129, 0.12)',
+                border: '1px solid rgba(16, 185, 129, 0.25)',
+                color: '#34d399',
+                padding: '6px 14px',
+                borderRadius: '8px',
+                fontSize: '12px',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <span style={{ width: '8px', height: '8px', background: '#34d399', borderRadius: '50%' }} />
+                🟢 Zero Active Intrusion Alerts
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* ── STAT CARD MODAL ───────────────────────────────────── */}

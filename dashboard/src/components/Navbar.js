@@ -14,6 +14,7 @@ export default function Navbar() {
   const [online, setOnline] = useState(false);
   const [cycle, setCycle] = useState(null);
   const [showProfile, setShowProfile] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
 
   const role = localStorage.getItem('role');
   const name = localStorage.getItem('name');
@@ -37,7 +38,8 @@ export default function Navbar() {
     { path: '/admin', label: 'Admin Console', roles: ['ADMIN'] },
     { path: '/ngo', label: 'Operations', roles: ['ADMIN', 'NGO'] },
     { path: '/donor', label: 'Donor View', roles: ['ADMIN', 'DONOR'] },
-    { path: '/auditor', label: 'Audit Desk', roles: ['ADMIN', 'AUDITOR'] }
+    { path: '/auditor', label: 'Audit Desk', roles: ['ADMIN', 'AUDITOR'] },
+    { path: '/security', label: '🛡️ Threat Intel', roles: ['ADMIN', 'AUDITOR'] }
   ];
 
   const visibleLinks = allLinks.filter(link => link.roles.includes(role));
@@ -57,16 +59,6 @@ export default function Navbar() {
     .map(part => part[0]?.toUpperCase())
     .join('');
 
-  const buttonStyle = {
-    background: 'rgba(255,255,255,0.08)',
-    border: '1px solid rgba(255,255,255,0.14)',
-    color: '#f8fafc',
-    padding: '8px 14px',
-    borderRadius: '999px',
-    fontSize: '12px',
-    cursor: 'pointer',
-    fontWeight: 700
-  };
 
   const handleLogout = () => {
     localStorage.clear();
@@ -156,7 +148,18 @@ export default function Navbar() {
                     : 'transparent',
                   border: location.pathname === link.path
                     ? '1px solid rgba(255,255,255,0.14)'
-                    : '1px solid transparent'
+                    : '1px solid transparent',
+                  transition: 'all 0.2s ease-in-out'
+                }}
+                onMouseEnter={(e) => {
+                  if (location.pathname !== link.path) {
+                    e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (location.pathname !== link.path) {
+                    e.currentTarget.style.background = 'transparent';
+                  }
                 }}
               >
                 {link.label}
@@ -167,7 +170,7 @@ export default function Navbar() {
           <div style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '10px',
+            gap: '12px',
             flexWrap: 'wrap',
             justifyContent: 'flex-end'
           }}>
@@ -176,12 +179,12 @@ export default function Navbar() {
                 color: '#fef3c7',
                 fontSize: '12px',
                 fontWeight: 700,
-                padding: '8px 12px',
+                padding: '8px 14px',
                 borderRadius: '999px',
                 background: 'rgba(245, 158, 11, 0.12)',
                 border: '1px solid rgba(245, 158, 11, 0.18)'
               }}>
-                Cycle {cycle}
+                🔄 Cycle {cycle}
               </div>
             )}
 
@@ -189,10 +192,10 @@ export default function Navbar() {
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
-              padding: '8px 12px',
+              padding: '8px 14px',
               borderRadius: '999px',
-              background: 'rgba(255,255,255,0.08)',
-              border: '1px solid rgba(255,255,255,0.12)',
+              background: 'rgba(255,255,255,0.06)',
+              border: '1px solid rgba(255,255,255,0.1)',
               color: '#dbeafe',
               fontSize: '12px',
               fontWeight: 700
@@ -202,61 +205,159 @@ export default function Navbar() {
                 height: '8px',
                 borderRadius: '50%',
                 background: online ? '#22c55e' : '#ef4444',
-                boxShadow: online ? '0 0 0 5px rgba(34,197,94,0.12)' : '0 0 0 5px rgba(239,68,68,0.12)'
+                boxShadow: online ? '0 0 8px rgba(34,197,94,0.6)' : '0 0 8px rgba(239,68,68,0.6)'
               }} />
-              {online ? 'Blockchain Online' : 'Blockchain Offline'}
+              {online ? 'On-Chain' : 'Syncing'}
             </div>
 
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              padding: '6px 10px 6px 6px',
-              borderRadius: '999px',
-              background: 'rgba(255,255,255,0.08)',
-              border: '1px solid rgba(255,255,255,0.12)'
-            }}>
-              <div style={{
-                width: '30px',
-                height: '30px',
-                borderRadius: '50%',
-                background: 'linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%)',
-                color: '#183b6b',
-                display: 'grid',
-                placeItems: 'center',
-                fontSize: '12px',
-                fontWeight: 800
-              }}>
-                {initials || 'U'}
-              </div>
-              <div style={{ lineHeight: 1.15 }}>
-                <div style={{ color: '#f8fafc', fontSize: '12px', fontWeight: 700 }}>
-                  {name || 'Authenticated User'}
+            {/* Profile Dropdown */}
+            <div style={{ position: 'relative' }}>
+              <div 
+                onClick={() => setShowDropdown(!showDropdown)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  padding: '5px 12px 5px 6px',
+                  borderRadius: '999px',
+                  background: showDropdown ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.06)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <div style={{
+                  width: '30px',
+                  height: '30px',
+                  borderRadius: '50%',
+                  background: 'linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%)',
+                  color: '#183b6b',
+                  display: 'grid',
+                  placeItems: 'center',
+                  fontSize: '12px',
+                  fontWeight: 800
+                }}>
+                  {initials || 'U'}
                 </div>
-                {role && (
-                  <span style={{
-                    display: 'inline-block',
-                    marginTop: '4px',
-                    background: badge.bg,
-                    color: badge.color,
-                    padding: '2px 9px',
-                    borderRadius: '999px',
-                    fontSize: '10px',
-                    fontWeight: 800,
-                    letterSpacing: '0.07em'
-                  }}>
-                    {role}
-                  </span>
-                )}
+                <div style={{ lineHeight: 1.15, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                  <div style={{ color: '#f8fafc', fontSize: '12px', fontWeight: 700 }}>
+                    {name || 'User'}
+                  </div>
+                  {role && (
+                    <span style={{
+                      marginTop: '2px',
+                      background: badge.bg,
+                      color: badge.color,
+                      padding: '1px 6px',
+                      borderRadius: '999px',
+                      fontSize: '9px',
+                      fontWeight: 800,
+                      letterSpacing: '0.05em'
+                    }}>
+                      {role}
+                    </span>
+                  )}
+                </div>
+                <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '9px', marginLeft: '2px' }}>
+                  {showDropdown ? '▲' : '▼'}
+                </span>
               </div>
-            </div>
 
-            <button type="button" onClick={() => setShowProfile(true)} style={buttonStyle}>
-              Profile
-            </button>
-            <button type="button" onClick={handleLogout} style={buttonStyle}>
-              Logout
-            </button>
+              {showDropdown && (
+                <>
+                  <div 
+                    onClick={() => setShowDropdown(false)}
+                    style={{
+                      position: 'fixed',
+                      top: 0,
+                      left: 0,
+                      width: '100vw',
+                      height: '100vh',
+                      zIndex: 199
+                    }}
+                  />
+                  <div style={{
+                    position: 'absolute',
+                    right: 0,
+                    top: '44px',
+                    width: '210px',
+                    background: 'rgba(15, 23, 42, 0.95)',
+                    backdropFilter: 'blur(16px)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: '12px',
+                    boxShadow: '0 12px 40px rgba(0,0,0,0.4)',
+                    padding: '6px',
+                    zIndex: 200,
+                    animation: 'fadeIn 0.15s ease-out'
+                  }}>
+                    <div style={{
+                      padding: '8px 12px',
+                      borderBottom: '1px solid rgba(255,255,255,0.06)',
+                      marginBottom: '4px'
+                    }}>
+                      <div style={{ color: 'rgba(226,232,240,0.4)', fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Logged in as
+                      </div>
+                      <div style={{ color: '#fff', fontSize: '13px', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
+                        {name || 'User'}
+                      </div>
+                    </div>
+                    
+                    <button 
+                      onClick={() => {
+                        setShowProfile(true);
+                        setShowDropdown(false);
+                      }}
+                      style={{
+                        width: '100%',
+                        background: 'none',
+                        border: 'none',
+                        color: '#f8fafc',
+                        padding: '8px 12px',
+                        textAlign: 'left',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        transition: 'background 0.2s'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                    >
+                      👤 Manage Profile
+                    </button>
+                    
+                    <button 
+                      onClick={handleLogout}
+                      style={{
+                        width: '100%',
+                        background: 'none',
+                        border: 'none',
+                        color: '#f87171',
+                        padding: '8px 12px',
+                        textAlign: 'left',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        transition: 'background 0.2s'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                    >
+                      🚪 Log Out
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </nav>

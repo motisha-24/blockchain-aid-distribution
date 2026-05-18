@@ -1,7 +1,14 @@
 import React, { useState, useEffect } from "react";
 import {
-  View, Text, StyleSheet, ScrollView, TextInput,
-  Pressable, ActivityIndicator, Alert, RefreshControl
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TextInput,
+  Pressable,
+  ActivityIndicator,
+  Alert,
+  RefreshControl,
 } from "react-native";
 import { getActivePackages, activateSession, getActiveSession } from "../api/endpoints";
 import { useAuth } from "../context/AuthContext";
@@ -16,6 +23,7 @@ export default function SessionSetupScreen({ navigation }) {
   const [packages, setPackages] = useState([]);
   const [selectedPackageId, setSelectedPackageId] = useState("");
   const [activeSession, setActiveSession] = useState(null);
+  const [isFocused, setIsFocused] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -26,7 +34,7 @@ export default function SessionSetupScreen({ navigation }) {
     try {
       const [sessionRes, pkgRes] = await Promise.all([
         getActiveSession().catch(() => ({ success: false })),
-        getActivePackages()
+        getActivePackages(),
       ]);
 
       if (sessionRes.success && sessionRes.session) {
@@ -58,6 +66,14 @@ export default function SessionSetupScreen({ navigation }) {
       Alert.alert("Required", "Please enter the distribution location.");
       return;
     }
+    if (location.trim().length < 3) {
+      Alert.alert("Invalid Location", "Location must be at least 3 characters.");
+      return;
+    }
+    if (location.trim().length > 100) {
+      Alert.alert("Invalid Location", "Location cannot exceed 100 characters.");
+      return;
+    }
     if (!selectedPackageId) {
       Alert.alert("Required", "Please select an Aid Package before activating.");
       return;
@@ -82,10 +98,41 @@ export default function SessionSetupScreen({ navigation }) {
     }
   };
 
+  // Helper to color-code aid type pills for immediate cognitive cues
+  const getAidPillStyles = (type, isSelected) => {
+    const norm = (type || "").toUpperCase();
+    if (norm.includes("MAIZE")) {
+      return {
+        bg: isSelected ? "#fef3c7" : "#fffbeb",
+        border: isSelected ? "#f59e0b" : "#fde68a",
+        text: "#92400e",
+      };
+    }
+    if (norm.includes("OIL")) {
+      return {
+        bg: isSelected ? "#ffe4e6" : "#fff1f2",
+        border: isSelected ? "#f43f5e" : "#fecdd3",
+        text: "#9f1239",
+      };
+    }
+    if (norm.includes("RICE")) {
+      return {
+        bg: isSelected ? "#e0f2fe" : "#f0f9ff",
+        border: isSelected ? "#0ea5e9" : "#bae6fd",
+        text: "#0369a1",
+      };
+    }
+    return {
+      bg: isSelected ? "#e0e7ff" : "#f1f5f9",
+      border: isSelected ? "#6366f1" : "#cbd5e1",
+      text: isSelected ? "#4338ca" : "#475569",
+    };
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#3182ce" />
+        <ActivityIndicator size="large" color="#4f46e5" />
         <Text style={styles.loadingText}>Loading packages...</Text>
       </View>
     );
@@ -95,7 +142,7 @@ export default function SessionSetupScreen({ navigation }) {
     <ScrollView
       style={styles.page}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3182ce" />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4f46e5" />}
     >
       <Text style={styles.title}>Configure Session</Text>
       <Text style={styles.subtitle}>
@@ -105,11 +152,13 @@ export default function SessionSetupScreen({ navigation }) {
       {/* Active session banner */}
       {activeSession && (
         <View style={styles.activeBanner}>
-          <Text style={styles.activeBannerIcon}>🟢</Text>
+          <View style={styles.activeBannerIndicator}>
+            <View style={styles.breathingDot} />
+          </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.activeBannerTitle}>Session Active</Text>
-            <Text style={styles.activeBannerSub}>Location: {activeSession.location}</Text>
-            <Text style={styles.activeBannerSub}>Expires: End of day</Text>
+            <Text style={styles.activeBannerTitle}>Distribution Session Active</Text>
+            <Text style={styles.activeBannerSub}>📍 Location: {activeSession.location}</Text>
+            <Text style={styles.activeBannerSub}>⏰ Expires: End of day</Text>
           </View>
         </View>
       )}
@@ -118,11 +167,13 @@ export default function SessionSetupScreen({ navigation }) {
       <View style={styles.card}>
         <Text style={styles.label}>📍 Distribution Location *</Text>
         <TextInput
-          style={styles.input}
+          style={[styles.input, isFocused && styles.inputFocused]}
           placeholder="e.g. Gweru Ward 5"
-          placeholderTextColor="#a0aec0"
+          placeholderTextColor="#94a3b8"
           value={location}
           onChangeText={setLocation}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
         />
       </View>
 
@@ -139,7 +190,7 @@ export default function SessionSetupScreen({ navigation }) {
             An administrator must create Aid Packages from the web dashboard before you can start a session.
           </Text>
           <Pressable style={styles.refreshBtn} onPress={onRefresh}>
-            <Text style={styles.refreshBtnLabel}>↻ Refresh</Text>
+            <Text style={styles.refreshBtnLabel}>↻ Refresh Packages</Text>
           </Pressable>
         </View>
       ) : (
@@ -151,8 +202,8 @@ export default function SessionSetupScreen({ navigation }) {
               style={[styles.pkgCard, isSelected && styles.pkgCardSelected]}
               onPress={() => setSelectedPackageId(pkg.id)}
             >
-              <View style={styles.pkgHeader}>
-                <View>
+              <View style={pkgHeaderStyle(isSelected)}>
+                <View style={{ flex: 1 }}>
                   <Text style={[styles.pkgTitle, isSelected && styles.pkgTitleSelected]}>
                     📍 {pkg.location || "All Locations"}
                   </Text>
@@ -168,13 +219,26 @@ export default function SessionSetupScreen({ navigation }) {
               </View>
 
               <View style={styles.itemsRow}>
-                {pkg.items && pkg.items.map((it, idx) => (
-                  <View key={idx} style={[styles.itemPill, isSelected && styles.itemPillSelected]}>
-                    <Text style={[styles.itemPillText, isSelected && styles.itemPillTextSelected]}>
-                      {it.amount} {it.unit || it.aid_unit} {it.aid_type || it.type}
-                    </Text>
-                  </View>
-                ))}
+                {pkg.items &&
+                  pkg.items.map((it, idx) => {
+                    const pillColor = getAidPillStyles(it.aid_type || it.type, isSelected);
+                    return (
+                      <View
+                        key={idx}
+                        style={[
+                          styles.itemPill,
+                          {
+                            backgroundColor: pillColor.bg,
+                            borderColor: pillColor.border,
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.itemPillText, { color: pillColor.text }]}>
+                          {it.amount} {it.unit || it.aid_unit} {it.aid_type || it.type}
+                        </Text>
+                      </View>
+                    );
+                  })}
               </View>
             </Pressable>
           );
@@ -185,7 +249,7 @@ export default function SessionSetupScreen({ navigation }) {
       <Pressable
         style={[
           styles.activateBtn,
-          (!location.trim() || !selectedPackageId) && styles.activateBtnDisabled
+          (!location.trim() || !selectedPackageId) && styles.activateBtnDisabled,
         ]}
         onPress={handleActivate}
         disabled={saving || !location.trim() || !selectedPackageId}
@@ -194,7 +258,7 @@ export default function SessionSetupScreen({ navigation }) {
           <ActivityIndicator color="#fff" />
         ) : (
           <Text style={styles.activateBtnLabel}>
-            {activeSession ? "🔄 Update Session" : "▶ Activate Session"}
+            {activeSession ? "🔄 Update Active Session" : "▶ Activate Session Now"}
           </Text>
         )}
       </Pressable>
@@ -206,79 +270,256 @@ export default function SessionSetupScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: "#f0f4f8" },
-  content: { padding: 16, gap: 12, paddingBottom: 32 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
-  loadingText: { color: "#718096", fontSize: 14 },
+// Simple helper to avoid nested style declarations inside render map
+const pkgHeaderStyle = (isSelected) => ({
+  flexDirection: "row",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  marginBottom: 8,
+});
 
-  title: { fontSize: 22, fontWeight: "800", color: "#1a202c" },
-  subtitle: { color: "#4a5568", fontSize: 13, lineHeight: 20 },
+const styles = StyleSheet.create({
+  page: { 
+    flex: 1, 
+    backgroundColor: "#f8fafc" 
+  },
+  content: { 
+    padding: 16, 
+    gap: 14, 
+    paddingBottom: 32 
+  },
+  center: { 
+    flex: 1, 
+    alignItems: "center", 
+    justifyContent: "center", 
+    gap: 12,
+    backgroundColor: "#f8fafc"
+  },
+  loadingText: { 
+    color: "#64748b", 
+    fontSize: 14,
+    fontWeight: "500" 
+  },
+
+  title: { 
+    fontSize: 22, 
+    fontWeight: "800", 
+    color: "#0f172a" 
+  },
+  subtitle: { 
+    color: "#64748b", 
+    fontSize: 13, 
+    lineHeight: 18 
+  },
 
   activeBanner: {
-    flexDirection: "row", alignItems: "center", gap: 12,
-    backgroundColor: "#c6f6d5", borderRadius: 12, padding: 14,
-    borderWidth: 1, borderColor: "#9ae6b4"
+    flexDirection: "row", 
+    alignItems: "center", 
+    gap: 12,
+    backgroundColor: "#f0fdf4", 
+    borderRadius: 16, 
+    padding: 14,
+    borderWidth: 1, 
+    borderColor: "#bbf7d0",
+    shadowColor: "#10b981",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 1,
   },
-  activeBannerIcon: { fontSize: 22 },
-  activeBannerTitle: { fontWeight: "800", color: "#22543d", fontSize: 15 },
-  activeBannerSub: { color: "#276749", fontSize: 12, marginTop: 2 },
+  activeBannerIndicator: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#dcfce7",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  breathingDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#10b981",
+  },
+  activeBannerTitle: { 
+    fontWeight: "800", 
+    color: "#166534", 
+    fontSize: 14 
+  },
+  activeBannerSub: { 
+    color: "#15803d", 
+    fontSize: 12, 
+    marginTop: 2,
+    fontWeight: "500" 
+  },
 
   card: {
-    backgroundColor: "#fff", borderRadius: 12, padding: 14,
-    borderWidth: 1, borderColor: "#e2e8f0"
+    backgroundColor: "#ffffff", 
+    borderRadius: 16, 
+    padding: 16,
+    borderWidth: 1, 
+    borderColor: "#e2e8f0",
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  label: { fontWeight: "700", color: "#2d3748", marginBottom: 8, fontSize: 13 },
+  label: { 
+    fontWeight: "700", 
+    color: "#334155", 
+    marginBottom: 8, 
+    fontSize: 13 
+  },
   input: {
-    borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 8,
-    padding: 10, color: "#1a202c", fontSize: 14, backgroundColor: "#f7fafc"
+    borderWidth: 1, 
+    borderColor: "#cbd5e1", 
+    borderRadius: 12,
+    padding: 12, 
+    color: "#0f172a", 
+    fontSize: 14, 
+    backgroundColor: "#f8fafc"
+  },
+  inputFocused: {
+    borderColor: "#4f46e5",
+    backgroundColor: "#ffffff",
   },
 
-  sectionTitle: { fontSize: 14, fontWeight: "700", color: "#4a5568", marginTop: 4 },
+  sectionTitle: { 
+    fontSize: 14, 
+    fontWeight: "700", 
+    color: "#475569", 
+    marginTop: 4 
+  },
 
   emptyCard: {
-    backgroundColor: "#fff", borderRadius: 12, padding: 28, alignItems: "center",
-    borderWidth: 1, borderColor: "#e2e8f0", gap: 8
+    backgroundColor: "#ffffff", 
+    borderRadius: 16, 
+    padding: 32, 
+    alignItems: "center",
+    borderWidth: 1, 
+    borderColor: "#e2e8f0", 
+    gap: 10,
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  emptyIcon: { fontSize: 36 },
-  emptyTitle: { fontWeight: "800", color: "#1a202c", fontSize: 16 },
-  emptySubtitle: { color: "#718096", textAlign: "center", fontSize: 13, lineHeight: 20 },
+  emptyIcon: { 
+    fontSize: 40 
+  },
+  emptyTitle: { 
+    fontWeight: "800", 
+    color: "#0f172a", 
+    fontSize: 16 
+  },
+  emptySubtitle: { 
+    color: "#64748b", 
+    textAlign: "center", 
+    fontSize: 13, 
+    lineHeight: 18 
+  },
   refreshBtn: {
-    marginTop: 8, backgroundColor: "#ebf8ff", borderRadius: 8,
-    paddingVertical: 8, paddingHorizontal: 20, borderWidth: 1, borderColor: "#90cdf4"
+    marginTop: 8, 
+    backgroundColor: "#f5f3ff", 
+    borderRadius: 10,
+    paddingVertical: 10, 
+    paddingHorizontal: 20, 
+    borderWidth: 1, 
+    borderColor: "#ddd6fe"
   },
-  refreshBtnLabel: { color: "#3182ce", fontWeight: "700" },
+  refreshBtnLabel: { 
+    color: "#4f46e5", 
+    fontWeight: "700",
+    fontSize: 13 
+  },
 
   pkgCard: {
-    backgroundColor: "#fff", borderRadius: 12, padding: 14,
-    borderWidth: 2, borderColor: "#e2e8f0", gap: 10
+    backgroundColor: "#ffffff", 
+    borderRadius: 16, 
+    padding: 16,
+    borderWidth: 1.5, 
+    borderColor: "#e2e8f0", 
+    gap: 12,
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  pkgCardSelected: { borderColor: "#3182ce", backgroundColor: "#ebf8ff" },
-  pkgHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  pkgTitle: { fontSize: 15, fontWeight: "800", color: "#2d3748" },
-  pkgTitleSelected: { color: "#2b6cb0" },
-  pkgMeta: { fontSize: 12, color: "#718096", marginTop: 2 },
+  pkgCardSelected: { 
+    borderColor: "#4f46e5", 
+    backgroundColor: "#f5f3ff",
+  },
+  pkgTitle: { 
+    fontSize: 15, 
+    fontWeight: "800", 
+    color: "#1e293b" 
+  },
+  pkgTitleSelected: { 
+    color: "#4f46e5" 
+  },
+  pkgMeta: { 
+    fontSize: 12, 
+    color: "#64748b", 
+    marginTop: 2,
+    fontWeight: "500" 
+  },
   selectedBadge: {
-    backgroundColor: "#3182ce", borderRadius: 20,
-    paddingHorizontal: 10, paddingVertical: 3
+    backgroundColor: "#4f46e5", 
+    borderRadius: 20,
+    paddingHorizontal: 10, 
+    paddingVertical: 4
   },
-  selectedBadgeText: { color: "#fff", fontWeight: "700", fontSize: 11 },
+  selectedBadgeText: { 
+    color: "#ffffff", 
+    fontWeight: "700", 
+    fontSize: 11 
+  },
 
-  itemsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-  itemPill: {
-    backgroundColor: "#edf2f7", borderRadius: 20,
-    paddingHorizontal: 10, paddingVertical: 4
+  itemsRow: { 
+    flexDirection: "row", 
+    flexWrap: "wrap", 
+    gap: 8 
   },
-  itemPillSelected: { backgroundColor: "#bee3f8" },
-  itemPillText: { fontSize: 12, fontWeight: "600", color: "#4a5568" },
-  itemPillTextSelected: { color: "#2b6cb0" },
+  itemPill: {
+    borderRadius: 20,
+    paddingHorizontal: 10, 
+    paddingVertical: 5,
+    borderWidth: 1,
+  },
+  itemPillText: { 
+    fontSize: 12, 
+    fontWeight: "700" 
+  },
 
   activateBtn: {
-    backgroundColor: "#2b6cb0", borderRadius: 12, paddingVertical: 14,
-    alignItems: "center", marginTop: 8
+    backgroundColor: "#4f46e5", 
+    borderRadius: 16, 
+    paddingVertical: 14,
+    alignItems: "center", 
+    marginTop: 8,
+    shadowColor: "#4f46e5",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3,
   },
-  activateBtnDisabled: { backgroundColor: "#a0aec0" },
-  activateBtnLabel: { color: "#fff", fontWeight: "800", fontSize: 16 },
+  activateBtnDisabled: { 
+    backgroundColor: "#cbd5e1" 
+  },
+  activateBtnLabel: { 
+    color: "#ffffff", 
+    fontWeight: "800", 
+    fontSize: 15 
+  },
 
-  hint: { textAlign: "center", color: "#a0aec0", fontSize: 12, lineHeight: 18 },
+  hint: { 
+    textAlign: "center", 
+    color: "#94a3b8", 
+    fontSize: 12, 
+    lineHeight: 18,
+    marginTop: 4 
+  },
 });

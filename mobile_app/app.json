@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "mobile_app",
+    "name": "AidChain",
     "slug": "mobile_app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -34,7 +34,15 @@
     "owner": "motisha",
     "plugins": [
       "expo-secure-store",
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
     ]
   }
 }

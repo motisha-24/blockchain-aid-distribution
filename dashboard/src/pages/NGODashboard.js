@@ -16,7 +16,7 @@ import {
   getDistributionHistory, getCampaigns,
   getHardwareProfile, updateHardwareProfile,
   queueHardwareEnrollment, getEnrollmentRequests,
-  getHardwareEvents, startFingerprintEnrollment,
+  startFingerprintEnrollment,
   getFingerprintEnrollmentStatus
 } from '../services/api';
 
@@ -45,8 +45,8 @@ export default function NGODashboard() {
     officer_id: 'ngo_officer',
     device_id: 'aidchain-field-01'
   });
+  // eslint-disable-next-line no-unused-vars
   const [hardwareErrors, setHardwareErrors] = useState({});
-  const [hardwareEvents, setHardwareEvents] = useState([]);
   const [fingerprintStatus, setFingerprintStatus] = useState(null); // null, 'waiting', 'success', 'failed'
   const [currentEnrollmentId, setCurrentEnrollmentId] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
@@ -89,8 +89,8 @@ export default function NGODashboard() {
   useEffect(() => {
     const fetchInitial = async () => {
       try {
-        const [s, p, c, h, e, he] = await Promise.allSettled([
-          getStats(), getPending(), getCampaigns(), getHardwareProfile(), getEnrollmentRequests(), getHardwareEvents()
+        const [s, p, c, h, e] = await Promise.allSettled([
+          getStats(), getPending(), getCampaigns(), getHardwareProfile(), getEnrollmentRequests()
         ]);
         if (s.status === 'fulfilled') setStats(s.value.data);
         if (p.status === 'fulfilled') setPending(p.value.data.pending || []);
@@ -100,9 +100,6 @@ export default function NGODashboard() {
         }
         if (e.status === 'fulfilled') {
           setEnrollmentRequests(e.value.data.requests || []);
-        }
-        if (he.status === 'fulfilled') {
-          setHardwareEvents(he.value.data.events || []);
         }
       } catch {}
     };
@@ -122,8 +119,8 @@ export default function NGODashboard() {
 
   const refreshData = async () => {
     try {
-      const [s, p, c, h, e, he] = await Promise.allSettled([
-        getStats(), getPending(), getCampaigns(), getHardwareProfile(), getEnrollmentRequests(), getHardwareEvents()
+      const [s, p, c, h, e] = await Promise.allSettled([
+        getStats(), getPending(), getCampaigns(), getHardwareProfile(), getEnrollmentRequests()
       ]);
       if (s.status === 'fulfilled') setStats(s.value.data);
       if (p.status === 'fulfilled') setPending(p.value.data.pending || []);
@@ -133,9 +130,6 @@ export default function NGODashboard() {
       }
       if (e.status === 'fulfilled') {
         setEnrollmentRequests(e.value.data.requests || []);
-      }
-      if (he.status === 'fulfilled') {
-        setHardwareEvents(he.value.data.events || []);
       }
     } catch {}
   };
@@ -327,6 +321,7 @@ export default function NGODashboard() {
     return errors;
   };
 
+  // eslint-disable-next-line no-unused-vars
   const handleSaveHardwareProfile = async () => {
     const errors = validateHardwareProfile();
     setHardwareErrors(errors);
@@ -836,50 +831,7 @@ const handleSubmitFingerprint = async () => {
         </div>
       </div>
 
-      {/* ── Hardware Activity Log ── */}
-      <div className="card">
-        <div style={{
-          display: 'flex', justifyContent: 'space-between',
-          alignItems: 'center', marginBottom: '16px', gap: '12px',
-          flexWrap: 'wrap'
-        }}>
-          <div>
-            <h3 style={{ margin: 0, padding: 0, borderBottom: 'none' }}>
-              🔄 Hardware Activity Log
-            </h3>
-            <div style={{ fontSize: '12px', color: '#718096', marginTop: '6px' }}>
-              Live feed of ESP32 operations during enrollment and distribution.
-            </div>
-          </div>
-          <button className="btn btn-blue btn-sm" onClick={refreshData}>
-            Refresh
-          </button>
-        </div>
 
-        <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '8px' }}>
-          {hardwareEvents.length > 0 ? hardwareEvents.map((event, index) => (
-            <div key={index} style={{
-              padding: '8px',
-              marginBottom: '4px',
-              backgroundColor: event.event_type.includes('FAILED') ? '#fed7d7' :
-                               event.event_type.includes('SUCCESS') || event.event_type === 'BENEFICIARY_REGISTERED' ? '#c6f6d5' :
-                               '#e6fffa',
-              borderRadius: '4px',
-              fontSize: '14px'
-            }}>
-              <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
-                {event.timestamp} - {event.device_id}
-              </div>
-              <div>{event.message}</div>
-              {event.details && <div style={{ fontSize: '12px', color: '#718096', marginTop: '4px' }}>{event.details}</div>}
-            </div>
-          )) : (
-            <div style={{ textAlign: 'center', color: '#a0aec0', padding: '24px' }}>
-              No hardware activity yet
-            </div>
-          )}
-        </div>
-      </div>
 
       {/* ── Pending cache ── */}
       {pending.length > 0 && (
