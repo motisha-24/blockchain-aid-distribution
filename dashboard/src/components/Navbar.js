@@ -15,6 +15,16 @@ export default function Navbar() {
   const [cycle, setCycle] = useState(null);
   const [showProfile, setShowProfile] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
+
+  useEffect(() => {
+    document.body.classList.toggle('dark-theme', theme === 'dark');
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+  };
 
   const role = localStorage.getItem('role');
   const name = localStorage.getItem('name');
@@ -209,6 +219,37 @@ export default function Navbar() {
               }} />
               {online ? 'On-Chain' : 'Syncing'}
             </div>
+
+            {/* Theme Toggle Button */}
+            <button 
+              onClick={toggleTheme}
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '50%',
+                background: 'rgba(255,255,255,0.06)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                cursor: 'pointer',
+                display: 'grid',
+                placeItems: 'center',
+                color: '#f8fafc',
+                fontSize: '14px',
+                transition: 'all 0.2s ease',
+                userSelect: 'none',
+                padding: 0
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(255,255,255,0.14)';
+                e.currentTarget.style.transform = 'scale(1.05)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+                e.currentTarget.style.transform = 'scale(1)';
+              }}
+              title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            >
+              {theme === 'dark' ? '☀️' : '🌙'}
+            </button>
 
             {/* Profile Dropdown */}
             <div style={{ position: 'relative' }}>

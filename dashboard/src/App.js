@@ -30,6 +30,11 @@ function Layout({ children }) {
 }
 
 export default function App() {
+  React.useEffect(() => {
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.body.classList.toggle('dark-theme', savedTheme === 'dark');
+  }, []);
+
   return (
     <BrowserRouter>
       <Routes>

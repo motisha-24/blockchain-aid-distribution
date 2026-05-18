@@ -531,3 +531,95 @@ tbody tr:hover td {
   }
 }
 
+/* ================================================================
+   🌟 PREMIUM DARK THEME MODULE
+   ================================================================ */
+.dark-theme {
+  --bg: #090d16;
+  --bg-accent: #0f172a;
+  --surface: rgba(15, 23, 42, 0.85);
+  --surface-strong: #1e293b;
+  --surface-soft: #0b0f19;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --ink: #f8fafc;
+  --muted: #94a3b8;
+  --heading: #ffffff;
+  --brand: #3b82f6;
+  --brand-2: #60a5fa;
+  --success: #10b981;
+  --danger: #ef4444;
+  --shadow: 0 20px 48px rgba(0, 0, 0, 0.55);
+  --shadow-soft: 0 10px 25px rgba(0, 0, 0, 0.4);
+}
+
+/* Smooth transition when switching themes */
+body, .card, .stat-card, nav, input, select, textarea, button, td, th {
+  transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
+}
+
+body.dark-theme {
+  background: radial-gradient(circle at top left, #0f172a 0%, #090d16 60%, #020617 100%) !important;
+  color: var(--ink);
+}
+
+.dark-theme .card,
+.dark-theme .stat-card {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.95) 100%) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+.dark-theme tbody td {
+  background: rgba(30, 41, 59, 0.4) !important;
+  color: #cbd5e1 !important;
+  border-bottom-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+.dark-theme tbody tr:hover td {
+  background: rgba(51, 65, 85, 0.7) !important;
+}
+
+.dark-theme thead th {
+  background: #0f172a !important;
+  color: #94a3b8 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.dark-theme input,
+.dark-theme select,
+.dark-theme textarea,
+.dark-theme input[type="text"],
+.dark-theme input[type="number"] {
+  background: #0f172a !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  color: #f8fafc !important;
+}
+
+.dark-theme input:focus,
+.dark-theme select:focus,
+.dark-theme textarea:focus,
+.dark-theme input[type="text"]:focus,
+.dark-theme input[type="number"]:focus {
+  border-color: #3b82f6 !important;
+  background: #1e293b !important;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.25) !important;
+}
+
+.dark-theme .form-group label {
+  color: #94a3b8 !important;
+}
+
+.dark-theme .custom-tooltip {
+  background: rgba(15, 23, 42, 0.95) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.dark-theme .custom-tooltip-label {
+  color: #f8fafc !important;
+}
+
+.dark-theme .custom-tooltip-value {
+  color: #60a5fa !important;
+}
+
+
