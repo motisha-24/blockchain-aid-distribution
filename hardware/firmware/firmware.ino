@@ -148,9 +148,17 @@ void blinkBoth(int times, int onMs, int offMs) {
 }
 
 void runSelfTest() {
-  blinkLed(GREEN_LED_PIN, 1, 180, 120);
-  blinkLed(RED_LED_PIN, 1, 180, 120);
-  blinkBoth(1, 220, 160);
+  // Alternating Green and Red blinks 3 times on boot
+  for (int i = 0; i < 3; i++) {
+    setGreen(true);
+    setRed(false);
+    delay(150);
+    setGreen(false);
+    setRed(true);
+    delay(150);
+  }
+  allLedsOff();
+  delay(200);
 }
 
 void signalIdentified() {
@@ -226,10 +234,20 @@ void connectWifiBlocking() {
   Serial.printf("[WIFI] Connecting to %s", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
+  // Slow Red blinking while waiting for connection
+  bool ledState = false;
   while (WiFi.status() != WL_CONNECTED) {
+    ledState = !ledState;
+    setRed(ledState);
     delay(500);
     Serial.print(".");
   }
+
+  // Solid green on successful connection for 2.5 seconds
+  setRed(false);
+  setGreen(true);
+  delay(2500);
+  setGreen(false);
 
   Serial.println();
   Serial.print("[WIFI] Connected. IP: ");
@@ -1416,6 +1434,9 @@ void setup() {
   pinMode(RED_LED_PIN, OUTPUT);
   allLedsOff();
 
+  // 1. Run physical LED self-test immediately on power-up
+  runSelfTest();
+
   FingerSerial.begin(FP_BAUD, SERIAL_8N1, FP_RX_PIN, FP_TX_PIN);
   GsmSerial.begin(GSM_BAUD, SERIAL_8N1, GSM_RX_PIN, GSM_TX_PIN);
 
@@ -1436,8 +1457,9 @@ void setup() {
     Serial.println("[GSM] Warning: SIM800L did not respond during startup.");
   }
 
+  // 2. Connect to WiFi (blinks Red while connecting, solid Green when connected)
   connectWifiBlocking();
-  runSelfTest();
+
   if (!hardwareLogin()) {
     Serial.println("[AUTH] Initial hardware login failed.");
   }
