@@ -16,6 +16,16 @@ export default function LoginPage() {
   const [error,   setError]   = useState('');
   const [loading, setLoading] = useState(false);
   const [showPass, setShowPass] = useState(false);
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
+
+  React.useEffect(() => {
+    document.body.classList.toggle('dark-theme', theme === 'dark');
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+  };
 
   const validateForm = () => {
     const errs = {};
@@ -96,6 +106,42 @@ export default function LoginPage() {
       position: 'relative',
       overflow: 'hidden'
     }}>
+      {/* Floating Theme Toggler */}
+      <button 
+        onClick={toggleTheme}
+        style={{
+          position: 'absolute',
+          top: '20px',
+          right: '20px',
+          width: '38px',
+          height: '38px',
+          borderRadius: '50%',
+          background: 'var(--surface-strong)',
+          border: '1px solid var(--border-strong)',
+          boxShadow: 'var(--shadow-soft)',
+          cursor: 'pointer',
+          display: 'grid',
+          placeItems: 'center',
+          color: 'var(--ink)',
+          fontSize: '15px',
+          transition: 'all 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+          zIndex: 10,
+          userSelect: 'none',
+          padding: 0
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.transform = 'scale(1.08) rotate(15deg)';
+          e.currentTarget.style.background = 'var(--surface)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.transform = 'scale(1) rotate(0deg)';
+          e.currentTarget.style.background = 'var(--surface-strong)';
+        }}
+        title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+      >
+        {theme === 'dark' ? '☀️' : '🌙'}
+      </button>
+
       {/* ── Cryptographic Blockchain Network Nodes Overlay ── */}
       <div style={{
         position: 'absolute',
