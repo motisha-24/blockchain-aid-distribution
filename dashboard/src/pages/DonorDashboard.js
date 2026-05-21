@@ -8,11 +8,15 @@ import React, { useState, useEffect } from 'react';
 import {
   PieChart, Pie, Cell, Tooltip,
   BarChart, Bar, XAxis, YAxis,
-  CartesianGrid, Legend, ResponsiveContainer
+  CartesianGrid, Legend, ResponsiveContainer,
+  LineChart, Line
 } from 'recharts';
 import DashboardHero from '../components/DashboardHero';
 import StatCard from '../components/StatCard';
-import { getStats, getSMSLog, getHardwareEvents } from '../services/api';
+import {
+  getStats, getSMSLog, getHardwareEvents,
+  getCampaigns, getDistributionHistory, getTransaction
+} from '../services/api';
 
 const COLORS = [
   '#1a2d5a', '#38a169', '#d69e2e',
@@ -23,6 +27,11 @@ export default function DonorDashboard() {
   const [stats, setStats] = useState({});
   const [smsLog, setSmsLog] = useState([]);
   const [hardwareEvents, setHardwareEvents] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
+  const [distributionHistory, setDistributionHistory] = useState([]);
+  const [receiptId, setReceiptId] = useState('');
+  const [receiptResult, setReceiptResult] = useState(null);
+  const [receiptError, setReceiptError] = useState('');
 
   const normaliseLogEntry = (entry) => {
     if (typeof entry === 'string') {
@@ -52,10 +61,18 @@ export default function DonorDashboard() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [s, sms, he] = await Promise.all([getStats(), getSMSLog(), getHardwareEvents()]);
+        const [s, sms, he, c, history] = await Promise.all([
+          getStats(),
+          getSMSLog(),
+          getHardwareEvents(),
+          getCampaigns(),
+          getDistributionHistory(100)
+        ]);
         setStats(s.data);
         setSmsLog(sms.data.sms_log || []);
         setHardwareEvents(he.data.events || []);
+        setCampaigns(c.data.campaigns || []);
+        setDistributionHistory(history.data.distributions || []);
       } catch {}
     };
 
@@ -131,6 +148,64 @@ export default function DonorDashboard() {
       }).filter(Boolean)
     : [];
 
+  const campaignTotals = campaigns.reduce((totals, campaign) => {
+    const used = Number(campaign.budget_used) || 0;
+    const total = Number(campaign.budget_total) || 0;
+    totals.total += total;
+    totals.used += used;
+    totals.remaining += Math.max(0, total - used);
+    return totals;
+  }, { total: 0, used: 0, remaining: 0 });
+
+  const impactSummary = distributionHistory.reduce((summary, tx) => {
+    const key = `${tx.aid_type || 'UNKNOWN'} ${tx.aid_unit || ''}`.trim();
+    summary.totalRecords += 1;
+    summary.uniqueBeneficiaries.add(tx.beneficiary_id);
+    summary.aidTypes.add(tx.aid_type || 'UNKNOWN');
+    summary.quantities[key] = (summary.quantities[key] || 0) + (Number(tx.amount) || 0);
+    return summary;
+  }, {
+    totalRecords: 0,
+    uniqueBeneficiaries: new Set(),
+    aidTypes: new Set(),
+    quantities: {}
+  });
+
+  const locationData = Object.values(distributionHistory.reduce((acc, tx) => {
+    const name = tx.location || 'Unknown';
+    if (!acc[name]) acc[name] = { name, distributions: 0 };
+    acc[name].distributions += 1;
+    return acc;
+  }, {})).slice(0, 8);
+
+  const timelineData = Object.values(distributionHistory.reduce((acc, tx) => {
+    const timestamp = Number(tx.timestamp) || 0;
+    const name = timestamp
+      ? new Date(timestamp * 1000).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+      : 'Unknown';
+    if (!acc[name]) acc[name] = { name, distributions: 0 };
+    acc[name].distributions += 1;
+    return acc;
+  }, {})).reverse();
+
+  const handleReceiptSearch = async () => {
+    const id = parseInt(receiptId, 10);
+    if (!id || id <= 0) {
+      setReceiptResult(null);
+      setReceiptError('Enter a valid transaction ID');
+      return;
+    }
+
+    try {
+      setReceiptError('');
+      const res = await getTransaction(id);
+      setReceiptResult({ id, ...res.data });
+    } catch (e) {
+      setReceiptResult(null);
+      setReceiptError(e.response?.data?.error || 'Receipt not found');
+    }
+  };
+
   const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
       return (
@@ -148,7 +223,7 @@ export default function DonorDashboard() {
   };
 
   return (
-    <div className="page">
+    <div className="page professional-dashboard donor-dashboard">
       <DashboardHero
         eyebrow="Donor Transparency"
         title="Funding visibility with live distribution oversight"
@@ -203,6 +278,124 @@ export default function DonorDashboard() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
+        <div className="card">
+          <h3>Donor Funding Overview</h3>
+          <div className="stats-grid" style={{ marginBottom: '16px' }}>
+            <StatCard label="Campaign Budget" value={campaignTotals.total} color="#1a2d5a" icon="Funds" sub="Total pledged units" />
+            <StatCard label="Budget Used" value={campaignTotals.used} color="#38a169" icon="Used" sub="Reserved for aid" />
+            <StatCard label="Remaining" value={campaignTotals.remaining} color="#d69e2e" icon="Open" sub="Still available" />
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Campaign</th>
+                  <th>Donor</th>
+                  <th>Aid</th>
+                  <th>Used / Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {campaigns.length > 0 ? campaigns.slice(0, 6).map(campaign => (
+                  <tr key={campaign.id}>
+                    <td>{campaign.name}</td>
+                    <td>{campaign.donor_label}</td>
+                    <td><span className="badge badge-blue">{campaign.aid_type}</span></td>
+                    <td>{campaign.budget_used} / {campaign.budget_total}</td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: 'center', color: '#94a3b8' }}>No donor campaigns recorded yet</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="card">
+          <h3>Impact Summary</h3>
+          <div style={{ display: 'grid', gap: '14px' }}>
+            <StatCard label="Recent Records" value={impactSummary.totalRecords} color="#1a2d5a" icon="Proof" sub="Latest on-chain sample" />
+            <StatCard label="Unique Recipients" value={impactSummary.uniqueBeneficiaries.size} color="#38a169" icon="Reach" sub="In loaded history" />
+            <StatCard label="Aid Categories" value={impactSummary.aidTypes.size} color="#805ad5" icon="Types" sub="Different aid types" />
+          </div>
+          <div style={{ marginTop: '14px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            {Object.entries(impactSummary.quantities).slice(0, 8).map(([key, amount]) => (
+              <span key={key} className="badge badge-gray">{amount} {key}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
+        <div className="card">
+          <h3>Distribution by Location</h3>
+          {locationData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={locationData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={{ stroke: '#e2e8f0' }} />
+                <YAxis tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={false} />
+                <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(79, 70, 229, 0.05)' }} />
+                <Bar dataKey="distributions" fill="#3182ce" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div style={{ textAlign: 'center', color: '#94a3b8', padding: '46px 20px' }}>No location data yet</div>
+          )}
+        </div>
+
+        <div className="card">
+          <h3>Distribution Timeline</h3>
+          {timelineData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <LineChart data={timelineData} margin={{ top: 10, right: 20, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={{ stroke: '#e2e8f0' }} />
+                <YAxis tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={false} />
+                <Tooltip content={<CustomTooltip />} />
+                <Line type="monotone" dataKey="distributions" stroke="#38a169" strokeWidth={3} dot={{ r: 4 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div style={{ textAlign: 'center', color: '#94a3b8', padding: '46px 20px' }}>No timeline data yet</div>
+          )}
+        </div>
+      </div>
+
+      <div className="card glass-card">
+        <h3>Public Receipt Explorer</h3>
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '16px' }}>
+          <input
+            type="number"
+            placeholder="Transaction ID"
+            value={receiptId}
+            onChange={e => setReceiptId(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleReceiptSearch()}
+            style={{ minWidth: '220px', flex: '1' }}
+          />
+          <button className="btn btn-primary" onClick={handleReceiptSearch}>Verify Receipt</button>
+        </div>
+        {receiptError && <div style={{ color: '#991b1b', fontWeight: 700, marginBottom: '12px' }}>{receiptError}</div>}
+        {receiptResult && (
+          <div className="table-wrap">
+            <table>
+              <tbody>
+                <tr><td>Transaction</td><td>#{receiptResult.id}</td></tr>
+                <tr><td>Aid</td><td>{receiptResult.amount} {receiptResult.aid_unit} {receiptResult.aid_type}</td></tr>
+                <tr><td>Location</td><td>{receiptResult.location}</td></tr>
+                <tr><td>Cycle</td><td>{receiptResult.cycle}</td></tr>
+                <tr><td>Status</td><td><span className="badge badge-green">{receiptResult.status}</span></td></tr>
+                <tr><td>Chain ID</td><td>{stats.chain_id || 'N/A'}</td></tr>
+                <tr><td>Aid Contract</td><td style={{ fontFamily: 'monospace', fontSize: '11px' }}>{stats.aid_address || 'N/A'}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>

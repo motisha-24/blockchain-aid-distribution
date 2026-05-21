@@ -1,0 +1,544 @@
+/* ================================================================
+   Animations & Micro-Interactions — Professional UI Polish
+   Professional UI Enhancement — May 2026
+================================================================ */
+
+/* ── Page Transitions ──────────────────────────────────────────– */
+
+@keyframes pageEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page {
+  animation: pageEnter 0.3s ease-out;
+}
+
+/* ── Card & Element Entrance ───────────────────────────────────– */
+
+@keyframes cardSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.card,
+.stat-card {
+  animation: cardSlideUp 0.4s ease-out;
+}
+
+/* ── Staggered Animation for Multiple Elements ─────────────────– */
+
+@keyframes staggerIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.stat-card:nth-child(1) {
+  animation: staggerIn 0.4s ease-out 0.05s both;
+}
+
+.stat-card:nth-child(2) {
+  animation: staggerIn 0.4s ease-out 0.1s both;
+}
+
+.stat-card:nth-child(3) {
+  animation: staggerIn 0.4s ease-out 0.15s both;
+}
+
+.stat-card:nth-child(4) {
+  animation: staggerIn 0.4s ease-out 0.2s both;
+}
+
+.stat-card:nth-child(n+5) {
+  animation: staggerIn 0.4s ease-out 0.25s both;
+}
+
+/* ── Button Interactions ───────────────────────────────────────– */
+
+.btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.btn::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.btn:active::before {
+  animation: ripple 0.6s ease-out;
+}
+
+@keyframes ripple {
+  to {
+    width: 300px;
+    height: 300px;
+    opacity: 0;
+  }
+}
+
+/* Button hover scale effect */
+.btn-primary:hover:not(:disabled),
+.btn-success:hover:not(:disabled),
+.btn-danger:hover:not(:disabled) {
+  animation: buttonHover 0.2s ease-out forwards;
+}
+
+@keyframes buttonHover {
+  to {
+    transform: translateY(-2px);
+  }
+}
+
+/* ── Input Field Focus Effects ─────────────────────────────────– */
+
+.form-input,
+.form-textarea,
+.form-select {
+  position: relative;
+}
+
+.form-input::placeholder {
+  transition: all var(--transition-base);
+}
+
+.form-input:focus::placeholder {
+  opacity: 0.5;
+  transform: translateX(-2px);
+}
+
+/* ── Toggle & Checkbox Animations ──────────────────────────────– */
+
+input[type="checkbox"],
+input[type="radio"] {
+  transition: all var(--transition-base);
+}
+
+input[type="checkbox"]:checked {
+  animation: checkboxCheck 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+@keyframes checkboxCheck {
+  0% {
+    transform: scale(0.8);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ── Table Row Hover Effect ────────────────────────────────────– */
+
+tbody tr {
+  transition: all var(--transition-base);
+}
+
+tbody tr:hover {
+  transform: translateX(2px);
+  animation: rowHighlight 0.2s ease-out;
+}
+
+@keyframes rowHighlight {
+  from {
+    background-color: transparent;
+  }
+  to {
+    background-color: var(--color-surface-soft);
+  }
+}
+
+/* ── Badge Pulse Animation ─────────────────────────────────────– */
+
+.badge {
+  animation: badgePulse 2s ease-in-out infinite;
+}
+
+@keyframes badgePulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+.badge.success {
+  animation: badgeSuccessPulse 2.5s ease-in-out infinite;
+}
+
+@keyframes badgeSuccessPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(47, 133, 90, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(47, 133, 90, 0);
+  }
+}
+
+/* ── Alert Toast Animations ────────────────────────────────────– */
+
+.toast {
+  animation: toastSlideIn var(--transition-base) ease-out;
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes toastSlideOut {
+  to {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+}
+
+.toast.removing {
+  animation: toastSlideOut var(--transition-base) ease-in forwards;
+}
+
+/* ── Loading Skeleton Animations ───────────────────────────────– */
+
+.skeleton {
+  animation: loading 1.5s infinite ease-in-out;
+}
+
+@keyframes loading {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ── Spinner Animation ─────────────────────────────────────────– */
+
+.spinner {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner-sm {
+  animation: spin 0.6s linear infinite;
+}
+
+/* ── Pulsing Dot Animation (Online Status) ─────────────────────– */
+
+.navbar-online-dot {
+  animation: pulseOnline 2s ease-in-out infinite;
+}
+
+@keyframes pulseOnline {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(34, 197, 94, 0);
+  }
+}
+
+.navbar-online-dot.offline {
+  animation: none;
+}
+
+/* ── Smooth Color Transitions ──────────────────────────────────– */
+
+body,
+.card,
+.navbar,
+.btn {
+  transition: background-color var(--transition-base), 
+              color var(--transition-base),
+              border-color var(--transition-base);
+}
+
+/* ── Focus Visible Effects ─────────────────────────────────────– */
+
+*:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+  animation: focusRing 0.2s ease-out;
+}
+
+@keyframes focusRing {
+  from {
+    outline-width: 0;
+  }
+  to {
+    outline-width: 3px;
+  }
+}
+
+/* ── Drawer Slide Animation ────────────────────────────────────– */
+
+@keyframes drawerSlideIn {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes backdropFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.navbar-mobile-menu {
+  animation: drawerSlideIn var(--transition-smoothly);
+}
+
+.navbar-mobile-menu-backdrop {
+  animation: backdropFade var(--transition-smoothly);
+}
+
+/* ── Modal Animations ──────────────────────────────────────────– */
+
+.modal {
+  animation: modalSlideUp var(--transition-smoothly);
+}
+
+.modal-backdrop {
+  animation: backdropFade var(--transition-smoothly);
+}
+
+@keyframes modalSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ── Link Underline Animation ──────────────────────────────────– */
+
+a {
+  position: relative;
+}
+
+a:not(.btn):not(.navbar-link)::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 0;
+  height: 2px;
+  background: var(--color-primary);
+  transition: width var(--transition-base);
+}
+
+a:not(.btn):not(.navbar-link):hover::after {
+  width: 100%;
+}
+
+/* ── Dropdown Animation ────────────────────────────────────────– */
+
+.navbar-dropdown {
+  animation: dropdownSlide var(--transition-smoothly);
+}
+
+@keyframes dropdownSlide {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Icon Rotation Effects ─────────────────────────────────────– */
+
+.navbar-profile-chevron {
+  transition: transform var(--transition-base);
+}
+
+.navbar-profile.open .navbar-profile-chevron {
+  animation: chevronRotate 0.3s ease-out forwards;
+}
+
+@keyframes chevronRotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(180deg);
+  }
+}
+
+/* ── Breadcrumb Navigation Animation ───────────────────────────– */
+
+.breadcrumbs {
+  animation: breadcrumbsSlide 0.3s ease-out;
+}
+
+@keyframes breadcrumbsSlide {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ── Empty State Animation ─────────────────────────────────────– */
+
+.empty-state {
+  animation: emptyStateFade 0.4s ease-out;
+}
+
+@keyframes emptyStateFade {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.empty-state-icon {
+  animation: iconBounce 2s ease-in-out infinite;
+}
+
+@keyframes iconBounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+/* ── Smooth Table Transitions ──────────────────────────────────– */
+
+thead th {
+  transition: all var(--transition-base);
+}
+
+thead th:hover {
+  background-color: var(--color-bg-accent);
+}
+
+/* ── Data List Item Animations ─────────────────────────────────– */
+
+li {
+  animation: listItemFade 0.3s ease-out;
+}
+
+@keyframes listItemFade {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+li:nth-child(1) {
+  animation-delay: 0.05s;
+}
+
+li:nth-child(2) {
+  animation-delay: 0.1s;
+}
+
+li:nth-child(3) {
+  animation-delay: 0.15s;
+}
+
+li:nth-child(n+4) {
+  animation-delay: 0.2s;
+}
+
+/* ── Accessibility: Reduce Motion ──────────────────────────────– */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Accessibility: High Contrast ──────────────────────────────– */
+
+@media (prefers-contrast: more) {
+  .btn,
+  .card,
+  .stat-card {
+    box-shadow: 0 0 0 2px currentColor;
+  }
+  
+  a:not(.btn):not(.navbar-link)::after {
+    height: 3px;
+  }
+}
+
+/* ── Print Friendly Animations ─────────────────────────────────– */
+
+@media print {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

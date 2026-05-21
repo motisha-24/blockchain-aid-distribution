@@ -6,7 +6,9 @@
 
 import json
 import os
+import re
 from web3 import Web3
+from web3._utils.events import EventLogErrorFlags
 from config import RPC_URL, REGISTRY_ADDRESS, AID_ADDRESS, PRIVATE_KEY, CHAIN_ID
 
 # ── Connect to blockchain node ────────────────────────────────
@@ -237,6 +239,56 @@ def get_transaction(tx_id):
             "officer"       : result[7],
             "status"        : result[8]
         }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def get_transaction_by_hash(tx_hash):
+    try:
+        if not w3.is_connected():
+            return {"success": False, "error": "Blockchain node is not reachable"}
+        if not AID_ADDRESS:
+            return {"success": False, "error": "Aid contract address is not configured"}
+        if not isinstance(tx_hash, str) or not re.fullmatch(r"0x[a-fA-F0-9]{64}", tx_hash):
+            return {"success": False, "error": "Invalid Ethereum transaction hash"}
+
+        receipt = w3.eth.get_transaction_receipt(tx_hash)
+        if not receipt:
+            return {"success": False, "error": "Transaction receipt not found"}
+
+        contract_address = Web3.to_checksum_address(AID_ADDRESS)
+        matching_logs = [
+            log for log in receipt.get("logs", [])
+            if log.get("address") == contract_address
+        ]
+        if not matching_logs:
+            return {
+                "success": False,
+                "error": "Transaction hash does not belong to AidDistribution"
+            }
+
+        decoded = aid_contract.events.AidDistributed().process_receipt(
+            receipt,
+            errors=EventLogErrorFlags.Discard
+        )
+        if not decoded:
+            return {
+                "success": False,
+                "error": "No AidDistributed event found for this hash"
+            }
+
+        tx_id = decoded[0]["args"]["txId"]
+        result = get_transaction(tx_id)
+        if not result["success"]:
+            return result
+
+        result.update({
+            "id": tx_id,
+            "tx_hash": tx_hash,
+            "block_number": receipt.blockNumber,
+            "gas_used": receipt.gasUsed
+        })
+        return result
     except Exception as e:
         return {"success": False, "error": str(e)}
 

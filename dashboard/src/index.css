@@ -1,25 +1,30 @@
 /* ================================================================
    Global Styles — Blockchain Aid Distribution Dashboard
    Author: Motisha John Mafukashe — R2211825P
+   Enhanced with professional design tokens — May 2026
 ================================================================ */
 
+@import url('./design-tokens.css');
+@import url('./components-library.css');
+
 :root {
-  --bg: #eef3f7;
-  --bg-accent: #dbe7f3;
-  --surface: rgba(255, 255, 255, 0.88);
-  --surface-strong: #ffffff;
-  --surface-soft: #f8fbfd;
-  --border: rgba(15, 23, 42, 0.08);
-  --border-strong: rgba(26, 45, 90, 0.14);
-  --ink: #1f2937;
-  --muted: #64748b;
-  --heading: #11284f;
-  --brand: #183b6b;
-  --brand-2: #2a5a8f;
-  --success: #2f855a;
-  --danger: #c2410c;
-  --shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
-  --shadow-soft: 0 8px 22px rgba(15, 23, 42, 0.06);
+  /* Legacy variable mappings for existing components */
+  --bg: var(--color-bg);
+  --bg-accent: var(--color-bg-accent);
+  --surface: var(--color-surface);
+  --surface-strong: var(--color-surface-strong);
+  --surface-soft: var(--color-surface-soft);
+  --border: var(--color-border);
+  --border-strong: var(--color-border-strong);
+  --ink: var(--color-text);
+  --muted: var(--color-text-muted);
+  --heading: var(--color-text-heading);
+  --brand: var(--color-primary);
+  --brand-2: var(--color-primary-hover);
+  --success: var(--color-success);
+  --danger: var(--color-danger);
+  --shadow: var(--shadow-lg);
+  --shadow-soft: var(--shadow-md);
 }
 
 * {
@@ -33,11 +38,11 @@ html {
 }
 
 body {
-  font-family: 'Trebuchet MS', 'Segoe UI Variable', 'Segoe UI', sans-serif;
-  background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.95) 0%, rgba(219, 231, 243, 0.75) 26%, rgba(238, 243, 247, 0.92) 56%, #e9eff4 100%);
-  color: var(--ink);
-  line-height: 1.5;
+  font-family: var(--font-family-sans);
+  background: var(--gradient-bg);
+  color: var(--color-text);
+  line-height: var(--line-height-normal);
+  transition: all var(--transition-base);
 }
 
 a {
@@ -622,4 +627,127 @@ body.dark-theme {
   color: #60a5fa !important;
 }
 
+/* ================================================================
+   Professional dashboard refinement for donor and auditor views
+   ================================================================ */
+.professional-dashboard {
+  max-width: 1480px;
+}
 
+.professional-dashboard .dashboard-hero {
+  border-radius: 14px;
+  padding: 26px 28px;
+  background:
+    linear-gradient(135deg, rgba(15, 23, 42, 0.96) 0%, rgba(30, 64, 111, 0.94) 58%, rgba(13, 148, 136, 0.86) 100%);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18);
+}
+
+.professional-dashboard .dashboard-hero-title {
+  font-family: 'Segoe UI Variable', 'Segoe UI', sans-serif;
+  font-size: 31px;
+  letter-spacing: 0;
+}
+
+.professional-dashboard .dashboard-hero-subtitle {
+  max-width: 820px;
+}
+
+.professional-dashboard .card,
+.professional-dashboard .stat-card {
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.07);
+}
+
+.professional-dashboard .card {
+  padding: 20px;
+}
+
+.professional-dashboard .card h3 {
+  font-family: 'Segoe UI Variable', 'Segoe UI', sans-serif;
+  font-size: 16px;
+  letter-spacing: 0;
+  padding-bottom: 10px;
+}
+
+.professional-dashboard .stat-card {
+  padding: 17px 18px;
+  border-top-width: 3px;
+}
+
+.professional-dashboard .stat-card:hover {
+  transform: translateY(-2px);
+}
+
+.professional-dashboard .stat-card .value {
+  font-size: 27px;
+}
+
+.professional-dashboard .stats-grid {
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+.professional-dashboard .table-wrap {
+  border-radius: 10px;
+}
+
+.professional-dashboard .legacy-dashboard-header {
+  display: none !important;
+}
+
+.professional-dashboard thead th {
+  background: #eef5fb;
+  color: #475569;
+}
+
+.professional-dashboard tbody td {
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.professional-dashboard .btn {
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.professional-dashboard .btn:hover {
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  background: #eef2f7;
+  color: #183b6b;
+  border: 1px solid #dbe5ef;
+}
+
+.professional-dashboard input,
+.professional-dashboard select {
+  border-radius: 8px;
+}
+
+.auditor-dashboard .audit-search-card {
+  border: 1px solid rgba(13, 148, 136, 0.18);
+}
+
+.auditor-dashboard .audit-search-card input[type="text"] {
+  font-family: Consolas, Monaco, monospace;
+}
+
+.donor-dashboard .dashboard-hero {
+  background:
+    linear-gradient(135deg, rgba(20, 83, 45, 0.95) 0%, rgba(22, 101, 52, 0.92) 48%, rgba(26, 45, 90, 0.9) 100%);
+}
+
+.dark-theme .professional-dashboard .dashboard-hero {
+  background:
+    linear-gradient(135deg, rgba(2, 6, 23, 0.98) 0%, rgba(30, 64, 111, 0.9) 55%, rgba(20, 184, 166, 0.58) 100%);
+}
+
+@media (max-width: 820px) {
+  .professional-dashboard .dashboard-hero {
+    padding: 22px;
+  }
+
+  .professional-dashboard .dashboard-hero-title {
+    font-size: 26px;
+  }
+}

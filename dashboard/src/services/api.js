@@ -114,6 +114,9 @@ export const getPending = () => api.get('/api/cache/pending');
 export const getTransaction       = (id) =>
   api.get(`/api/transaction/${id}`);
 
+export const getTransactionByHash = (hash) =>
+  api.get(`/api/transaction/hash/${hash}`);
+
 export const getTotalTransactions = () =>
   api.get('/api/transactions/total');
 
