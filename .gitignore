@@ -14,12 +14,17 @@ build/
 venv/
 env/
 
-# Database — contains user passwords
+# Database — contains user passwords and personal data
 flask_api/users.db
+flask_api/aidchain.db
+*.db
 
 # Offline cache — contains encrypted transactions
 flask_api/offline_cache.json
 flask_api/sms_log.txt
+
+# Scratch/temp files
+scratch/
 
 # Node modules — too large to push
 node_modules/

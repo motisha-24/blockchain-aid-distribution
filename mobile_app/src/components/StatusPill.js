@@ -3,6 +3,7 @@ import { Text, View } from "react-native";
 const COLOR_MAP = {
   CONFIRMED: "#2f855a",
   PENDING: "#d69e2e",
+  COLLECTED: "#2f855a",
   NOT_COLLECTED: "#c53030",
   DEACTIVATED: "#4a5568",
 };

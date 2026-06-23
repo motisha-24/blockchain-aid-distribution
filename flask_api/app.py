@@ -19,11 +19,13 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import jwt
 from env_loader import get_setting
+from config import REGISTRY_ADDRESS, AID_ADDRESS, CHAIN_ID, RPC_URL
 from blockchain import (
     register_beneficiary,
     distribute_aid,
     get_beneficiary,
     get_transaction,
+    get_transaction_by_hash,
     has_collected,
     get_total_transactions,
     get_total_beneficiaries,
@@ -63,20 +65,32 @@ from database import (
     get_enrollment_request,
     list_enrollment_requests,
     get_next_pending_enrollment,
+    get_connection,
     update_enrollment_status,
     log_enrollment_status,
     get_latest_enrollment_status,
     log_hardware_event,
-    get_recent_hardware_events
+    get_recent_hardware_events,
+    create_aid_package,
+    get_active_aid_packages,
+    delete_aid_package,
+    activate_distribution_session,
+    get_active_session,
+    close_old_sessions,
+    update_gsm_status,
+    get_gsm_status,
+    queue_sms,
+    get_pending_sms_job,
+    mark_sms_job
 )
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app, origins=[
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://your-dashboard-domain.com"  # Replace with actual domain
-])
+CORS(app, 
+    origins=["http://localhost:3000", "http://127.0.0.1:3000", "https://your-dashboard-domain.com"],
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"]
+)
 
 JWT_SECRET = get_setting("JWT_SECRET", prefer="local")
 if not JWT_SECRET:
@@ -147,8 +161,8 @@ def generate_token(username, role):
     payload = {
         "sub": username,
         "role": role,
-        "iat": datetime.datetime.utcnow(),
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(seconds=JWT_EXP_DELTA_SECONDS)
+        "iat": datetime.datetime.now(datetime.timezone.utc),
+        "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=JWT_EXP_DELTA_SECONDS)
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     return token
@@ -503,13 +517,13 @@ def create_new_user():
 
 
 @app.route("/api/campaigns", methods=["GET"])
-@require_auth(["ADMIN", "NGO"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def campaigns_list():
     return jsonify(list_campaigns()), 200
 
 
 @app.route("/api/campaign/<int:campaign_id>", methods=["GET"])
-@require_auth(["ADMIN", "NGO"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def campaign_details(campaign_id):
     return jsonify(get_campaign(campaign_id)), 200
 
@@ -975,10 +989,24 @@ def distribute_batch():
 
     results = []
     
+    # Get the current cycle number for stamping events
+    current_cycle_num = get_current_cycle().get("cycle", 0)
+
+    # Get the current nonce for the account to handle batching
+    current_nonce = None
+    if w3.is_connected():
+        try:
+            from blockchain import account
+            current_nonce = w3.eth.get_transaction_count(account.address)
+        except:
+            pass
+
     # Process each item
     for item in items:
-        aid_type = item.get("aid_type", "").upper().strip()
-        aid_unit = item.get("aid_unit", "").upper().strip()
+        aid_type = (item.get("aid_type") or item.get("type") or "").upper().strip()
+        aid_unit = (item.get("aid_unit") or item.get("unit") or "").upper().strip()
+        if not aid_unit:
+            aid_unit = "UNITS"
         amount = int(item.get("amount", 0))
         campaign_id = item.get("campaign_id")
         
@@ -991,6 +1019,14 @@ def distribute_batch():
                 "message": f"Beneficiary already received {aid_type} this cycle",
                 "aid_type": aid_type
             })
+            
+            # Log duplicate block for mobile visibility
+            log_hardware_event(
+                "DUPLICATE_BLOCKED",
+                f"Beneficiary {b_id} attempt for {aid_type} blocked (already received)",
+                data.get("device_id", "mobile"),
+                officer_id
+            )
             continue
             
         if campaign_id:
@@ -1006,9 +1042,16 @@ def distribute_batch():
                     results.append({"success": False, "aid_type": aid_type, "error": reserve["error"]})
                     continue
 
-            dist_result = distribute_aid(b_id, amount, aid_type, aid_unit, location)
+            dist_result = distribute_aid(
+                b_id, amount, aid_type, aid_unit, location, 
+                wait_for_receipt=False, 
+                manual_nonce=current_nonce
+            )
 
             if dist_result["success"]:
+                if current_nonce is not None:
+                    current_nonce += 1
+                
                 results.append({
                     "success": True,
                     "action": "DISTRIBUTED",
@@ -1016,6 +1059,19 @@ def distribute_batch():
                     "amount": amount,
                     "tx_hash": dist_result["tx_hash"]
                 })
+                
+                # Log individual item success for real-time mobile tracking
+                log_hardware_event(
+                    "AID_DISTRIBUTED",
+                    f"{aid_type} {amount} {aid_unit} distributed to beneficiary {b_id}",
+                    data.get("device_id", "mobile"),
+                    officer_id,
+                    f"Tx: {dist_result['tx_hash']} | Nonce: {current_nonce-1} | Block: {dist_result.get('block', 'N/A')}",
+                    cycle=current_cycle_num
+                )
+                
+                import time
+                time.sleep(2)
             else:
                 if campaign_id:
                     release_campaign_budget(campaign_id, amount)
@@ -1043,9 +1099,74 @@ def distribute_batch():
                 "cache_id": cached["id"]
             })
 
-    # Find if ANY item was distributed or cached
     any_success = any(r.get("success") for r in results)
-    
+
+    # --- SMART SMS DISPATCH ---
+    # Works for ALL clients: ESP32, Mobile App, Web Dashboard
+    if any_success:
+        try:
+            bene_res = get_enrollment_request(b_id)
+            if not bene_res["success"]:
+                print(f"[SMS-WARN] Could not find enrollment record for beneficiary {b_id}")
+            else:
+                phone = bene_res["request"].get("phone", "")
+                name  = bene_res["request"].get("name", "Beneficiary")
+
+                if not phone:
+                    print(f"[SMS-WARN] No phone number for beneficiary {b_id}")
+                else:
+                    # Build SMS from original items list (not results) for reliability
+                    successful_items = [
+                        item for item, r in zip(items, results)
+                        if r.get("success")
+                    ]
+                    if not successful_items:
+                        successful_items = items[:1]
+
+                    # Build a single description covering ALL items
+                    item_parts = []
+                    for it in successful_items:
+                        aid_type_sms = str(it.get("aid_type", "Aid")).upper()
+                        aid_unit_sms = str(it.get("aid_unit", ""))
+                        amount_sms   = str(it.get("amount", ""))
+                        if aid_type_sms == "CASH":
+                            item_parts.append(f"USD {amount_sms}")
+                        else:
+                            item_parts.append(f"{amount_sms} {aid_unit_sms} of {aid_type_sms}")
+
+                    item_desc = ", ".join(item_parts)
+
+                    # Get tx ref safely
+                    success_result = next((r for r in results if r.get("success")), {})
+                    tx_ref = str(success_result.get("tx_hash") or success_result.get("cache_id") or "SUCCESS")[:12]
+
+                    sms_msg = f"Dear {name}, you received {item_desc}. Ref: {tx_ref}. AidChain Zimbabwe."
+                    print(f"[SMS] Building message: '{sms_msg}'")
+
+                    gsm = get_gsm_status()
+                    print(f"[SMS] GSM Status: online={gsm['online']} signal={gsm['signal']} registered={gsm['registered']}")
+
+                    if gsm["online"]:
+                        queue_sms(phone, sms_msg)
+                        print(f"[SMS] Queued for GSM hardware delivery to {phone}")
+                    else:
+                        from sms import trigger_simgate_sms
+                        result = trigger_simgate_sms(phone, sms_msg)
+                        print(f"[SMS] SimGate result: {result}")
+        except Exception as e:
+            import traceback
+            print(f"[SMS-ERROR] Smart dispatch failed: {str(e)}")
+            print(traceback.format_exc())
+
+    # Log event for the batch
+    log_hardware_event(
+        "BATCH_DISTRIBUTION_PROCESSED" if any_success else "BATCH_DISTRIBUTION_FAILED",
+        f"Processed batch for beneficiary {b_id} ({len(items)} items)",
+        data.get("device_id", "mobile"),
+        officer_id,
+        f"Success items: {len([r for r in results if r.get('success')])}"
+    )
+
     if any_success:
         return jsonify(hardware_response(
             True,
@@ -1055,7 +1176,6 @@ def distribute_batch():
             results=results
         )), 200
     else:
-        # All failed or all blocked
         return jsonify(hardware_response(
             False,
             "BATCH_FAILED",
@@ -1063,6 +1183,69 @@ def distribute_batch():
             beneficiary_id=b_id,
             results=results
         )), 409
+
+
+# ================================================================
+#  PACKAGE AND SESSION ENDPOINTS
+# ================================================================
+
+@app.route("/api/packages/create", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def create_package():
+    data = request.get_json() or {}
+    cycle = get_current_cycle().get("cycle", "0")
+    location = data.get("location", "").strip()
+    items = data.get("items", [])
+    
+    if not location:
+        return jsonify({"error": "Location is required"}), 400
+        
+    result = create_aid_package(str(cycle), location, items)
+    return jsonify(result), 201 if result.get("success") else 400
+
+@app.route("/api/packages/active", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def get_active_packages():
+    location = request.args.get("location")
+    result = get_active_aid_packages(location)
+    return jsonify(result), 200
+
+@app.route("/api/packages/<package_id>", methods=["DELETE"])
+@require_auth(["ADMIN"])
+def remove_package(package_id):
+    result = delete_aid_package(package_id)
+    code = 200 if result.get("success") else 404
+    return jsonify(result), code
+
+@app.route("/api/sessions/activate", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def activate_session():
+    data = request.get_json() or {}
+    user = current_user()
+    officer_id = user["username"]
+    location = data.get("location", "").strip()
+    package_id = data.get("package_id", "").strip()
+    
+    if not location or not package_id:
+        return jsonify({"error": "Location and package_id are required"}), 400
+        
+    result = activate_distribution_session(officer_id, location, package_id)
+    return jsonify(result), 200 if result.get("success") else 400
+
+@app.route("/api/sessions/active", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def get_session():
+    user = current_user()
+    officer_id = user["username"]
+    result = get_active_session(officer_id)
+    return jsonify(result), 200 if result.get("success") else 404
+
+@app.route("/api/hardware/session", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def hardware_session():
+    # Hardware check for ANY running session
+    result = get_active_session()
+    return jsonify(result), 200 if result.get("success") else 404
 
 
 @app.route("/api/sync", methods=["POST"])
@@ -1097,6 +1280,15 @@ def transaction(tx_id):
     if tx_id <= 0:
         return jsonify({"error": "Invalid transaction ID"}), 400
     result = get_transaction(tx_id)
+    if result["success"]:
+        return jsonify(result), 200
+    return jsonify({"error": result["error"]}), 404
+
+
+@app.route("/api/transaction/hash/<tx_hash>", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
+def transaction_by_hash(tx_hash):
+    result = get_transaction_by_hash(tx_hash)
     if result["success"]:
         return jsonify(result), 200
     return jsonify({"error": result["error"]}), 404
@@ -1165,6 +1357,59 @@ def current_cycle():
     return jsonify(get_current_cycle()), 200
 
 
+@app.route("/api/cycle/progress", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
+def get_cycle_progress():
+    # 1. Get global stats from blockchain
+    total_tx   = get_total_transactions().get("total", 0)
+    cycle_info = get_current_cycle()
+    total_b    = get_total_beneficiaries().get("total", 0)
+    current_cycle_num = cycle_info.get("cycle", 0)
+
+    # Allow querying a specific past cycle via ?cycle=N, defaults to current
+    query_cycle = request.args.get("cycle", current_cycle_num, type=int)
+
+    # 2. Get collectors filtered by the requested cycle number
+    conn   = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT DISTINCT message
+        FROM hardware_events
+        WHERE event_type = 'AID_DISTRIBUTED'
+          AND cycle = ?
+    """, (query_cycle,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    beneficiaries_detail = []
+    seen_ids = set()
+
+    for row in rows:
+        msg = row[0]
+        match = re.search(r'beneficiary\s+(\d+)', msg, re.IGNORECASE)
+        if match:
+            try:
+                b_id = int(match.group(1))
+                if b_id not in seen_ids:
+                    seen_ids.add(b_id)
+                    beneficiaries_detail.append({
+                        "id": b_id,
+                        "status": "COLLECTED"
+                    })
+            except:
+                continue
+
+    return jsonify({
+        "cycle":                  query_cycle,
+        "current_cycle":          current_cycle_num,
+        "total_beneficiaries":    total_b,
+        "confirmed_on_blockchain": total_tx,
+        "total_distributed":      len(beneficiaries_detail),
+        "not_yet_distributed":    max(0, total_b - len(beneficiaries_detail)),
+        "beneficiaries_detail":   beneficiaries_detail
+    }), 200
+
+
 @app.route("/api/cycle/advance", methods=["POST"])
 @require_auth(["ADMIN", "NGO"])
 def next_cycle():
@@ -1227,7 +1472,7 @@ def hardware_ping():
         "success": True,
         "action": "HARDWARE_READY",
         "message": "Hardware API reachable",
-        "server_time": datetime.datetime.utcnow().isoformat() + "Z",
+        "server_time": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z",
         "blockchain_online": w3.is_connected(),
         "current_cycle": cycle.get("cycle", 0),
         "hardware_profile_ready": profile.get("success", False),
@@ -1664,6 +1909,26 @@ def get_enrollment_status_message():
 @app.route("/api/hardware/profile", methods=["GET"])
 @require_auth(["ADMIN", "NGO"])
 def hardware_profile():
+    # If there is an active session for this officer, return its details as the profile
+    user = current_user()
+    session_res = get_active_session(user["username"])
+    if session_res.get("success"):
+        session = session_res["session"]
+        pkg = session.get("package", {})
+        profile = {
+            "location": session["location"],
+            "officer_id": session["officer_id"],
+            "device_id": "aidchain-field-01",
+            "items": pkg.get("items", [])
+        }
+        return jsonify(hardware_response(
+            True,
+            "PROFILE_READY",
+            "Active session loaded",
+            profile=profile
+        )), 200
+
+    # Fallback to old hardware profile if no active session exists
     result = get_hardware_profile()
     if not result["success"]:
         return jsonify(hardware_response(
@@ -1761,6 +2026,48 @@ def sms_log():
 #  STATS ENDPOINT
 # ================================================================
 
+def build_distribution_analytics(total_transactions, limit=100):
+    aid_totals = {}
+    recent_totals = {}
+
+    try:
+        total = int(total_transactions or 0)
+    except (TypeError, ValueError):
+        total = 0
+
+    if total <= 0:
+        return {
+            "aid_type_breakdown": [],
+            "recent_activity": []
+        }
+
+    start = max(1, total - limit + 1)
+    recent_start = max(1, total - 19)
+
+    for tx_id in range(total, start - 1, -1):
+        result = get_transaction(tx_id)
+        if not result.get("success"):
+            continue
+
+        aid_type = str(result.get("aid_type") or "UNKNOWN").upper()
+        amount = int(result.get("amount") or 0)
+        aid_totals[aid_type] = aid_totals.get(aid_type, 0) + amount
+
+        if tx_id >= recent_start:
+            recent_totals[aid_type] = recent_totals.get(aid_type, 0) + amount
+
+    return {
+        "aid_type_breakdown": [
+            {"name": aid_type, "value": amount}
+            for aid_type, amount in aid_totals.items()
+        ],
+        "recent_activity": [
+            {"name": aid_type, "amount": amount}
+            for aid_type, amount in recent_totals.items()
+        ]
+    }
+
+
 @app.route("/api/stats", methods=["GET"])
 @require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def stats():
@@ -1769,14 +2076,26 @@ def stats():
     cycle         = get_current_cycle()
     pending_txs   = get_pending()
     campaigns_res = list_campaigns()
+    distribution_analytics = build_distribution_analytics(
+        total_tx.get("total", 0)
+    )
 
+    active_session = get_active_session()
+    
     return jsonify({
         "blockchain_online"  : w3.is_connected(),
         "current_cycle"      : cycle.get("cycle", 0),
         "total_transactions" : total_tx.get("total", 0),
         "total_beneficiaries": total_benes.get("total", 0),
         "pending_cache"      : len(pending_txs),
-        "total_campaigns"    : len(campaigns_res.get("campaigns", []))
+        "total_campaigns"    : len(campaigns_res.get("campaigns", [])),
+        "active_session"     : active_session if active_session.get("success") else None,
+        "chain_id"           : CHAIN_ID,
+        "rpc_url"            : RPC_URL,
+        "registry_address"   : REGISTRY_ADDRESS,
+        "aid_address"        : AID_ADDRESS,
+        "aid_type_breakdown" : distribution_analytics["aid_type_breakdown"],
+        "recent_activity"    : distribution_analytics["recent_activity"]
     }), 200
 
 
@@ -1795,6 +2114,89 @@ def get_hardware_events():
         return jsonify({"error": result["error"]}), 500
 
     return jsonify({"events": result["events"]}), 200
+
+@app.route("/api/hardware/events", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def log_event():
+    data = request.get_json() or {}
+    event_type = data.get("event_type", "UNKNOWN")
+    message = data.get("message", "")
+    device_id = data.get("device_id", "unknown")
+    details = data.get("details", "")
+    
+    user = current_user()
+    officer_id = user["username"]
+    
+    log_hardware_event(event_type, message, device_id, officer_id, details)
+    return jsonify({"success": True}), 200
+
+
+@app.route("/api/sms/fallback", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def sms_fallback_trigger():
+    data = request.get_json() or {}
+    phone = data.get("phone")
+    message = data.get("message")
+    if not phone or not message:
+        return jsonify({"success": False, "error": "phone and message are required"}), 400
+    from sms import trigger_simgate_sms
+    result = trigger_simgate_sms(phone, message)
+    return jsonify(result), (200 if result["success"] else 500)
+
+
+@app.route("/api/hardware/gsm-status", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def report_gsm_status():
+    """ESP32 calls this every ~5 minutes to report its GSM signal."""
+    data = request.get_json() or {}
+    device_id  = data.get("device_id", "unknown")
+    signal     = int(data.get("signal", 0))
+    registered = int(data.get("registered", 0))
+    update_gsm_status(device_id, signal, registered)
+    return jsonify({"success": True, "message": "GSM status updated"}), 200
+
+
+@app.route("/api/hardware/sms-queue", methods=["GET"])
+@require_auth(["ADMIN", "NGO"])
+def poll_sms_queue():
+    """ESP32 polls this to check if the server has an SMS job for it to send."""
+    result = get_pending_sms_job()
+    if not result["success"]:
+        return jsonify({"pending": False}), 200
+    return jsonify({"pending": True, "job": result["job"]}), 200
+
+
+@app.route("/api/hardware/sms-queue/result", methods=["POST"])
+@require_auth(["ADMIN", "NGO"])
+def sms_queue_result():
+    """ESP32 reports back whether it successfully sent the queued SMS."""
+    data   = request.get_json() or {}
+    job_id = data.get("job_id")
+    sent   = data.get("sent", False)
+    if not job_id:
+        return jsonify({"success": False, "error": "job_id required"}), 400
+
+    if sent:
+        mark_sms_job(job_id, "SENT")
+    else:
+        # Hardware failed — immediately fall back to SimGate
+        job_res = get_pending_sms_job()
+        mark_sms_job(job_id, "HW_FAILED")
+        # Retry via gateway using data passed from ESP32
+        phone   = data.get("phone", "")
+        message = data.get("message", "")
+        if phone and message:
+            from sms import trigger_simgate_sms
+            trigger_simgate_sms(phone, message)
+            print(f"[SMS] HW failed. SimGate fallback triggered for {phone}")
+    return jsonify({"success": True}), 200
+
+
+@app.route("/api/hardware/gsm-status", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
+def get_gsm_status_route():
+    """Dashboard can call this to display GSM module health."""
+    return jsonify(get_gsm_status()), 200
 
 
 if __name__ == "__main__":

@@ -14,6 +14,9 @@ import AdminDashboard    from './pages/AdminDashboard';
 import NGODashboard      from './pages/NGODashboard';
 import DonorDashboard    from './pages/DonorDashboard';
 import AuditorDashboard  from './pages/AuditorDashboard';
+import PrivacyPage      from './pages/PrivacyPage';
+import TermsPage        from './pages/TermsPage';
+import SecurityAuditPage from './pages/SecurityAuditPage';
 
 // ── Layout wrapper — adds Navbar above every protected page ───
 function Layout({ children }) {
@@ -27,6 +30,11 @@ function Layout({ children }) {
 }
 
 export default function App() {
+  React.useEffect(() => {
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.body.classList.toggle('dark-theme', savedTheme === 'dark');
+  }, []);
+
   return (
     <BrowserRouter>
       <Routes>
@@ -37,6 +45,10 @@ export default function App() {
 
         {/* Default — redirect root to login */}
         <Route path="/" element={<Navigate to="/login" replace/>}/>
+
+        {/* ── Info pages ────────────────────────────────── */}
+        <Route path="/privacy" element={<Layout><PrivacyPage/></Layout>}/>
+        <Route path="/terms" element={<Layout><TermsPage/></Layout>}/>
 
         {/* ── Admin only ─────────────────────────────────── */}
         <Route path="/admin" element={
@@ -63,6 +75,13 @@ export default function App() {
         <Route path="/auditor" element={
           <ProtectedRoute allowedRoles={['AUDITOR', 'ADMIN']}>
             <Layout><AuditorDashboard/></Layout>
+          </ProtectedRoute>
+        }/>
+
+        {/* ── Security Operations & Threat Intel — Admin & Auditor ── */}
+        <Route path="/security" element={
+          <ProtectedRoute allowedRoles={['ADMIN', 'AUDITOR']}>
+            <Layout><SecurityAuditPage/></Layout>
           </ProtectedRoute>
         }/>
 

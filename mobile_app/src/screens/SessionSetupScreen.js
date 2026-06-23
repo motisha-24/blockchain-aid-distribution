@@ -1,219 +1,525 @@
 import React, { useState, useEffect } from "react";
-import { 
-  View, Text, StyleSheet, ScrollView, TextInput, 
-  Pressable, ActivityIndicator, Alert 
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TextInput,
+  Pressable,
+  ActivityIndicator,
+  Alert,
+  RefreshControl,
 } from "react-native";
-import { getHardwareProfile, updateHardwareProfile } from "../api/endpoints";
+import { getActivePackages, activateSession, getActiveSession } from "../api/endpoints";
 import { useAuth } from "../context/AuthContext";
 
 export default function SessionSetupScreen({ navigation }) {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
-  
+
   const [location, setLocation] = useState("");
-  const [items, setItems] = useState([]);
+  const [packages, setPackages] = useState([]);
+  const [selectedPackageId, setSelectedPackageId] = useState("");
+  const [activeSession, setActiveSession] = useState(null);
+  const [isFocused, setIsFocused] = useState(false);
 
   useEffect(() => {
-    loadProfile();
+    loadData();
   }, []);
 
-  const loadProfile = async () => {
+  const loadData = async (isRefresh = false) => {
+    if (!isRefresh) setLoading(true);
     try {
-      const res = await getHardwareProfile();
-      if (res.success && res.profile) {
-        setLocation(res.profile.location || "");
-        setItems(res.profile.items || []);
+      const [sessionRes, pkgRes] = await Promise.all([
+        getActiveSession().catch(() => ({ success: false })),
+        getActivePackages(),
+      ]);
+
+      if (sessionRes.success && sessionRes.session) {
+        setActiveSession(sessionRes.session);
+        setLocation(sessionRes.session.location || "");
+        setSelectedPackageId(sessionRes.session.active_package_id || "");
+      } else {
+        setActiveSession(null);
+      }
+
+      if (pkgRes.success) {
+        setPackages(pkgRes.packages || []);
       }
     } catch (error) {
-      console.log("Failed to load profile", error);
+      console.log("Failed to load session data", error);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  const addItem = () => {
-    setItems([...items, { aid_type: "", aid_unit: "", amount: "" }]);
+  const onRefresh = () => {
+    setRefreshing(true);
+    loadData(true);
   };
 
-  const removeItem = (index) => {
-    const newItems = [...items];
-    newItems.splice(index, 1);
-    setItems(newItems);
-  };
-
-  const updateItem = (index, field, value) => {
-    const newItems = [...items];
-    newItems[index][field] = value;
-    setItems(newItems);
-  };
-
-  const handleSave = async () => {
-    if (!location) {
-      Alert.alert("Error", "Location is required");
+  const handleActivate = async () => {
+    if (!location.trim()) {
+      Alert.alert("Required", "Please enter the distribution location.");
       return;
     }
-    if (items.length === 0) {
-      Alert.alert("Error", "Please add at least one aid item");
+    if (location.trim().length < 3) {
+      Alert.alert("Invalid Location", "Location must be at least 3 characters.");
       return;
     }
-
-    // Validate items
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (!item.aid_type || !item.aid_unit || !item.amount) {
-        Alert.alert("Error", `Item #${i + 1} is missing fields`);
-        return;
-      }
+    if (location.trim().length > 100) {
+      Alert.alert("Invalid Location", "Location cannot exceed 100 characters.");
+      return;
     }
-
+    if (!selectedPackageId) {
+      Alert.alert("Required", "Please select an Aid Package before activating.");
+      return;
+    }
     setSaving(true);
     try {
-      const payload = {
-        location: location,
-        items: items.map(item => ({
-          ...item,
-          amount: parseInt(item.amount)
-        })),
-        officer_id: user?.username || "ngo_officer",
-        device_id: "aidchain-field-01" // Standard fallback for field device
-      };
-      
-      const res = await updateHardwareProfile(payload);
+      const res = await activateSession({ location: location.trim(), package_id: selectedPackageId });
       if (res.success) {
-        Alert.alert("Success", "Distribution Session active! Hardware is synced.", [
-          { text: "OK", onPress: () => navigation.goBack() }
-        ]);
+        Alert.alert(
+          "✅ Session Activated",
+          "Distribution session is now live. Hardware and mobile distribution will use this package.",
+          [{ text: "Go to Dashboard", onPress: () => navigation.goBack() }]
+        );
       } else {
-        Alert.alert("Error", res.error || "Failed to update session");
+        Alert.alert("Error", res.error || "Failed to start session");
       }
     } catch (error) {
-      const msg = error.response?.data?.error || error.response?.data?.message || error.message;
+      const msg = error.response?.data?.error || error.message;
       Alert.alert("Error", "Failed to start session: " + msg);
     } finally {
       setSaving(false);
     }
   };
 
+  // Helper to color-code aid type pills for immediate cognitive cues
+  const getAidPillStyles = (type, isSelected) => {
+    const norm = (type || "").toUpperCase();
+    if (norm.includes("MAIZE")) {
+      return {
+        bg: isSelected ? "#fef3c7" : "#fffbeb",
+        border: isSelected ? "#f59e0b" : "#fde68a",
+        text: "#92400e",
+      };
+    }
+    if (norm.includes("OIL")) {
+      return {
+        bg: isSelected ? "#ffe4e6" : "#fff1f2",
+        border: isSelected ? "#f43f5e" : "#fecdd3",
+        text: "#9f1239",
+      };
+    }
+    if (norm.includes("RICE")) {
+      return {
+        bg: isSelected ? "#e0f2fe" : "#f0f9ff",
+        border: isSelected ? "#0ea5e9" : "#bae6fd",
+        text: "#0369a1",
+      };
+    }
+    return {
+      bg: isSelected ? "#e0e7ff" : "#f1f5f9",
+      border: isSelected ? "#6366f1" : "#cbd5e1",
+      text: isSelected ? "#4338ca" : "#475569",
+    };
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#2b6cb0" />
-        <Text style={{ marginTop: 10 }}>Loading Session...</Text>
+        <ActivityIndicator size="large" color="#4f46e5" />
+        <Text style={styles.loadingText}>Loading packages...</Text>
       </View>
     );
   }
 
   return (
-    <ScrollView style={styles.page} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Distribution Session setup</Text>
+    <ScrollView
+      style={styles.page}
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4f46e5" />}
+    >
+      <Text style={styles.title}>Configure Session</Text>
       <Text style={styles.subtitle}>
-        Define the multi-aid package to be distributed for each fingerprint scan.
+        Select a centrally-defined Aid Package to activate for this distribution session.
       </Text>
 
+      {/* Active session banner */}
+      {activeSession && (
+        <View style={styles.activeBanner}>
+          <View style={styles.activeBannerIndicator}>
+            <View style={styles.breathingDot} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.activeBannerTitle}>Distribution Session Active</Text>
+            <Text style={styles.activeBannerSub}>📍 Location: {activeSession.location}</Text>
+            <Text style={styles.activeBannerSub}>⏰ Expires: End of day</Text>
+          </View>
+        </View>
+      )}
+
+      {/* Location input */}
       <View style={styles.card}>
-        <Text style={styles.label}>Distribution Location</Text>
+        <Text style={styles.label}>📍 Distribution Location *</Text>
         <TextInput
-          style={styles.input}
+          style={[styles.input, isFocused && styles.inputFocused]}
           placeholder="e.g. Gweru Ward 5"
+          placeholderTextColor="#94a3b8"
           value={location}
           onChangeText={setLocation}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
         />
       </View>
 
-      <Text style={styles.sectionTitle}>Aid Package</Text>
-      
-      {items.map((item, index) => (
-        <View key={index} style={styles.itemCard}>
-          <View style={styles.itemHeader}>
-            <Text style={styles.itemTitle}>Item #{index + 1}</Text>
-            <Pressable onPress={() => removeItem(index)} style={styles.removeBtn}>
-              <Text style={styles.removeBtnText}>Remove</Text>
-            </Pressable>
-          </View>
-          
-          <Text style={styles.label}>Aid Type (e.g. MAIZE, CASH, BLANKETS)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Type"
-            value={item.aid_type}
-            onChangeText={(v) => updateItem(index, "aid_type", v)}
-            autoCapitalize="characters"
-          />
+      {/* Package selection */}
+      <Text style={styles.sectionTitle}>
+        Available Aid Packages ({packages.length})
+      </Text>
 
-          <View style={styles.row}>
-            <View style={{ flex: 1, marginRight: 8 }}>
-              <Text style={styles.label}>Unit (KG, USD)</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Unit"
-                value={item.aid_unit}
-                onChangeText={(v) => updateItem(index, "aid_unit", v)}
-                autoCapitalize="characters"
-              />
-            </View>
-            <View style={{ flex: 1, marginLeft: 8 }}>
-              <Text style={styles.label}>Amount</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. 50"
-                value={item.amount ? String(item.amount) : ""}
-                onChangeText={(v) => updateItem(index, "amount", v)}
-                keyboardType="numeric"
-              />
-            </View>
-          </View>
+      {packages.length === 0 ? (
+        <View style={styles.emptyCard}>
+          <Text style={styles.emptyIcon}>📦</Text>
+          <Text style={styles.emptyTitle}>No Packages Available</Text>
+          <Text style={styles.emptySubtitle}>
+            An administrator must create Aid Packages from the web dashboard before you can start a session.
+          </Text>
+          <Pressable style={styles.refreshBtn} onPress={onRefresh}>
+            <Text style={styles.refreshBtnLabel}>↻ Refresh Packages</Text>
+          </Pressable>
         </View>
-      ))}
+      ) : (
+        packages.map((pkg) => {
+          const isSelected = selectedPackageId === pkg.id;
+          return (
+            <Pressable
+              key={pkg.id}
+              style={[styles.pkgCard, isSelected && styles.pkgCardSelected]}
+              onPress={() => setSelectedPackageId(pkg.id)}
+            >
+              <View style={pkgHeaderStyle(isSelected)}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.pkgTitle, isSelected && styles.pkgTitleSelected]}>
+                    📍 {pkg.location || "All Locations"}
+                  </Text>
+                  <Text style={styles.pkgMeta}>
+                    {pkg.items?.length || 0} item{(pkg.items?.length || 0) !== 1 ? "s" : ""} • Created {pkg.created_at?.split(" ")[0]}
+                  </Text>
+                </View>
+                {isSelected && (
+                  <View style={styles.selectedBadge}>
+                    <Text style={styles.selectedBadgeText}>✓ Selected</Text>
+                  </View>
+                )}
+              </View>
 
-      <Pressable style={styles.addBtn} onPress={addItem}>
-        <Text style={styles.addBtnLabel}>+ Add Aid Type</Text>
-      </Pressable>
+              <View style={styles.itemsRow}>
+                {pkg.items &&
+                  pkg.items.map((it, idx) => {
+                    const pillColor = getAidPillStyles(it.aid_type || it.type, isSelected);
+                    return (
+                      <View
+                        key={idx}
+                        style={[
+                          styles.itemPill,
+                          {
+                            backgroundColor: pillColor.bg,
+                            borderColor: pillColor.border,
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.itemPillText, { color: pillColor.text }]}>
+                          {it.amount} {it.unit || it.aid_unit} {it.aid_type || it.type}
+                        </Text>
+                      </View>
+                    );
+                  })}
+              </View>
+            </Pressable>
+          );
+        })
+      )}
 
-      <Pressable style={styles.saveBtn} onPress={handleSave} disabled={saving}>
+      {/* Activate button */}
+      <Pressable
+        style={[
+          styles.activateBtn,
+          (!location.trim() || !selectedPackageId) && styles.activateBtnDisabled,
+        ]}
+        onPress={handleActivate}
+        disabled={saving || !location.trim() || !selectedPackageId}
+      >
         {saving ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.saveBtnLabel}>Start Distribution Session</Text>
+          <Text style={styles.activateBtnLabel}>
+            {activeSession ? "🔄 Update Active Session" : "▶ Activate Session Now"}
+          </Text>
         )}
       </Pressable>
+
+      <Text style={styles.hint}>
+        Pull down to refresh the package list. Sessions automatically close at end of day.
+      </Text>
     </ScrollView>
   );
 }
 
+// Simple helper to avoid nested style declarations inside render map
+const pkgHeaderStyle = (isSelected) => ({
+  flexDirection: "row",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  marginBottom: 8,
+});
+
 const styles = StyleSheet.create({
-  center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  page: { flex: 1, backgroundColor: "#f7fafc" },
-  content: { padding: 16, paddingBottom: 40 },
-  title: { fontSize: 24, fontWeight: "800", color: "#2d3748", marginBottom: 4 },
-  subtitle: { fontSize: 14, color: "#718096", marginBottom: 20 },
-  sectionTitle: { fontSize: 18, fontWeight: "700", color: "#2d3748", marginTop: 10, marginBottom: 10 },
+  page: { 
+    flex: 1, 
+    backgroundColor: "#f8fafc" 
+  },
+  content: { 
+    padding: 16, 
+    gap: 14, 
+    paddingBottom: 32 
+  },
+  center: { 
+    flex: 1, 
+    alignItems: "center", 
+    justifyContent: "center", 
+    gap: 12,
+    backgroundColor: "#f8fafc"
+  },
+  loadingText: { 
+    color: "#64748b", 
+    fontSize: 14,
+    fontWeight: "500" 
+  },
+
+  title: { 
+    fontSize: 22, 
+    fontWeight: "800", 
+    color: "#0f172a" 
+  },
+  subtitle: { 
+    color: "#64748b", 
+    fontSize: 13, 
+    lineHeight: 18 
+  },
+
+  activeBanner: {
+    flexDirection: "row", 
+    alignItems: "center", 
+    gap: 12,
+    backgroundColor: "#f0fdf4", 
+    borderRadius: 16, 
+    padding: 14,
+    borderWidth: 1, 
+    borderColor: "#bbf7d0",
+    shadowColor: "#10b981",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  activeBannerIndicator: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#dcfce7",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  breathingDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#10b981",
+  },
+  activeBannerTitle: { 
+    fontWeight: "800", 
+    color: "#166534", 
+    fontSize: 14 
+  },
+  activeBannerSub: { 
+    color: "#15803d", 
+    fontSize: 12, 
+    marginTop: 2,
+    fontWeight: "500" 
+  },
+
   card: {
-    backgroundColor: "#fff", padding: 16, borderRadius: 12, marginBottom: 16,
-    shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 2
+    backgroundColor: "#ffffff", 
+    borderRadius: 16, 
+    padding: 16,
+    borderWidth: 1, 
+    borderColor: "#e2e8f0",
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  itemCard: {
-    backgroundColor: "#fff", padding: 16, borderRadius: 12, marginBottom: 12,
-    borderWidth: 1, borderColor: "#e2e8f0"
+  label: { 
+    fontWeight: "700", 
+    color: "#334155", 
+    marginBottom: 8, 
+    fontSize: 13 
   },
-  itemHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
-  itemTitle: { fontWeight: "700", color: "#4a5568", fontSize: 16 },
-  removeBtn: { backgroundColor: "#fed7d7", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
-  removeBtnText: { color: "#c53030", fontSize: 12, fontWeight: "700" },
-  label: { fontSize: 13, fontWeight: "600", color: "#4a5568", marginBottom: 6 },
   input: {
-    backgroundColor: "#edf2f7", borderRadius: 8, padding: 12, fontSize: 15,
-    color: "#2d3748", marginBottom: 12, borderWidth: 1, borderColor: "#e2e8f0"
+    borderWidth: 1, 
+    borderColor: "#cbd5e1", 
+    borderRadius: 12,
+    padding: 12, 
+    color: "#0f172a", 
+    fontSize: 14, 
+    backgroundColor: "#f8fafc"
   },
-  row: { flexDirection: "row" },
-  addBtn: {
-    backgroundColor: "#ebf8ff", borderRadius: 10, padding: 14, alignItems: "center",
-    marginBottom: 24, borderWidth: 1, borderColor: "#90cdf4"
+  inputFocused: {
+    borderColor: "#4f46e5",
+    backgroundColor: "#ffffff",
   },
-  addBtnLabel: { color: "#3182ce", fontWeight: "700", fontSize: 16 },
-  saveBtn: {
-    backgroundColor: "#38a169", borderRadius: 10, padding: 16, alignItems: "center",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3
+
+  sectionTitle: { 
+    fontSize: 14, 
+    fontWeight: "700", 
+    color: "#475569", 
+    marginTop: 4 
   },
-  saveBtnLabel: { color: "#fff", fontWeight: "800", fontSize: 16 },
+
+  emptyCard: {
+    backgroundColor: "#ffffff", 
+    borderRadius: 16, 
+    padding: 32, 
+    alignItems: "center",
+    borderWidth: 1, 
+    borderColor: "#e2e8f0", 
+    gap: 10,
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  emptyIcon: { 
+    fontSize: 40 
+  },
+  emptyTitle: { 
+    fontWeight: "800", 
+    color: "#0f172a", 
+    fontSize: 16 
+  },
+  emptySubtitle: { 
+    color: "#64748b", 
+    textAlign: "center", 
+    fontSize: 13, 
+    lineHeight: 18 
+  },
+  refreshBtn: {
+    marginTop: 8, 
+    backgroundColor: "#f5f3ff", 
+    borderRadius: 10,
+    paddingVertical: 10, 
+    paddingHorizontal: 20, 
+    borderWidth: 1, 
+    borderColor: "#ddd6fe"
+  },
+  refreshBtnLabel: { 
+    color: "#4f46e5", 
+    fontWeight: "700",
+    fontSize: 13 
+  },
+
+  pkgCard: {
+    backgroundColor: "#ffffff", 
+    borderRadius: 16, 
+    padding: 16,
+    borderWidth: 1.5, 
+    borderColor: "#e2e8f0", 
+    gap: 12,
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  pkgCardSelected: { 
+    borderColor: "#4f46e5", 
+    backgroundColor: "#f5f3ff",
+  },
+  pkgTitle: { 
+    fontSize: 15, 
+    fontWeight: "800", 
+    color: "#1e293b" 
+  },
+  pkgTitleSelected: { 
+    color: "#4f46e5" 
+  },
+  pkgMeta: { 
+    fontSize: 12, 
+    color: "#64748b", 
+    marginTop: 2,
+    fontWeight: "500" 
+  },
+  selectedBadge: {
+    backgroundColor: "#4f46e5", 
+    borderRadius: 20,
+    paddingHorizontal: 10, 
+    paddingVertical: 4
+  },
+  selectedBadgeText: { 
+    color: "#ffffff", 
+    fontWeight: "700", 
+    fontSize: 11 
+  },
+
+  itemsRow: { 
+    flexDirection: "row", 
+    flexWrap: "wrap", 
+    gap: 8 
+  },
+  itemPill: {
+    borderRadius: 20,
+    paddingHorizontal: 10, 
+    paddingVertical: 5,
+    borderWidth: 1,
+  },
+  itemPillText: { 
+    fontSize: 12, 
+    fontWeight: "700" 
+  },
+
+  activateBtn: {
+    backgroundColor: "#4f46e5", 
+    borderRadius: 16, 
+    paddingVertical: 14,
+    alignItems: "center", 
+    marginTop: 8,
+    shadowColor: "#4f46e5",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  activateBtnDisabled: { 
+    backgroundColor: "#cbd5e1" 
+  },
+  activateBtnLabel: { 
+    color: "#ffffff", 
+    fontWeight: "800", 
+    fontSize: 15 
+  },
+
+  hint: { 
+    textAlign: "center", 
+    color: "#94a3b8", 
+    fontSize: 12, 
+    lineHeight: 18,
+    marginTop: 4 
+  },
 });

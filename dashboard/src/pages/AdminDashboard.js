@@ -11,7 +11,9 @@ import {
   getStats, advanceCycle,
   getPending, syncCache,
   getAllBeneficiaries, getDistributionHistory,
-  getCampaigns, createCampaign
+  getCampaigns, createCampaign,
+  getActivePackages, createAidPackage, deleteAidPackage,
+  getHardwareEvents
 } from '../services/api';
 import axios from 'axios';
 
@@ -38,14 +40,23 @@ export default function AdminDashboard() {
   const [newUser,         setNewUser]         = useState({ username:'', password:'', role:'NGO', name:'', email:'' });
   const [newUserErrors,   setNewUserErrors]   = useState({});
   const [showForm,        setShowForm]        = useState(false);
+  const [showPassword,    setShowPassword]    = useState(false);
   const [newCampaign,     setNewCampaign]     = useState({ name:'', donor_label:'', aid_type:'MAIZE', budget_total:'' });
   const [newCampaignErrors,setNewCampaignErrors]= useState({});
+
+  // ── Aid Packages ───────────────────────────────────────────
+  const [activePackages,  setActivePackages]  = useState([]);
+  const [newPackage,      setNewPackage]      = useState({ location:'', items: [{ aid_type: 'MAIZE', unit: 'KG', amount: '' }] });
+  const [packageLoading,  setPackageLoading]  = useState(false);
 
   // ── Stat card modal ────────────────────────────────────────
   const [modal, setModal] = useState(null);
   // modal = { type: 'beneficiaries'|'distributions'|'users'|'pending', data: [] }
 
   const [modalLoading, setModalLoading] = useState(false);
+
+  // ── Events Log ──────────────────────────────────────────────
+  const [events, setEvents] = useState([]);
 
   const token      = localStorage.getItem('token');
   const name       = localStorage.getItem('name');
@@ -59,22 +70,99 @@ export default function AdminDashboard() {
 
   const fetchData = async () => {
     try {
-      const [s, p, u, c] = await Promise.all([
+      const [s, p, u, c, pkgRes, evRes] = await Promise.all([
         getStats(),
         getPending(),
         axios.get(`${API_BASE_URL}/api/auth/users`, { headers: authHeader }),
-        getCampaigns()
+        getCampaigns(),
+        getActivePackages(),
+        getHardwareEvents(30)
       ]);
       setStats(s.data);
       setPending(p.data.pending || []);
       setUsers(u.data.users || []);
       setCampaigns(c.data.campaigns || []);
+      setActivePackages(pkgRes.data.packages || []);
+      setEvents(evRes.data.events || []);
     } catch {}
   };
 
   const showAlert = (msg, type = 'success') => {
     setAlert({ msg, type });
     setTimeout(() => setAlert(null), 5000);
+  };
+
+  // ── Package Handlers ───────────────────────────────────────
+  const handleAddPackageItem = () => {
+    setNewPackage(prev => ({
+      ...prev,
+      items: [...prev.items, { aid_type: 'MAIZE', unit: 'KG', amount: '' }]
+    }));
+  };
+
+  const handleRemovePackageItem = (index) => {
+    setNewPackage(prev => {
+      const updated = [...prev.items];
+      updated.splice(index, 1);
+      return { ...prev, items: updated };
+    });
+  };
+
+  const handlePackageItemChange = (index, field, value) => {
+    setNewPackage(prev => {
+      const updated = [...prev.items];
+      updated[index][field] = value;
+      return { ...prev, items: updated };
+    });
+  };
+
+  const handleCreatePackage = async () => {
+    if (!newPackage.location.trim()) {
+      showAlert('Location is required', 'error');
+      return;
+    }
+    if (newPackage.items.length === 0) {
+      showAlert('At least one item is required', 'error');
+      return;
+    }
+    for (let i = 0; i < newPackage.items.length; i++) {
+      const item = newPackage.items[i];
+      if (!item.aid_type || !item.unit || !item.amount || Number(item.amount) <= 0) {
+        showAlert(`Invalid item details at row ${i + 1}`, 'error');
+        return;
+      }
+    }
+    setPackageLoading(true);
+    try {
+      const payload = {
+        cycle_id: stats.current_cycle ? String(stats.current_cycle) : "1",
+        location: newPackage.location.trim(),
+        items: newPackage.items.map(item => ({
+          aid_type: item.aid_type.trim().toUpperCase(),
+          unit: item.unit.trim().toUpperCase(),
+          amount: Number(item.amount)
+        })),
+        officer_id: name || "admin"
+      };
+      await createAidPackage(payload);
+      showAlert(`✓ Aid Package created for ${payload.location}`);
+      setNewPackage({ location:'', items: [{ aid_type: 'MAIZE', unit: 'KG', amount: '' }] });
+      fetchData();
+    } catch (e) {
+      showAlert(e.response?.data?.error || 'Failed to create package', 'error');
+    }
+    setPackageLoading(false);
+  };
+
+  const handleDeletePackage = async (pkg) => {
+    if (!window.confirm(`Delete package for "${pkg.location || 'All Locations'}"?\n\nThis will deactivate the package and prevent NGO officers from selecting it for new sessions.`)) return;
+    try {
+      await deleteAidPackage(pkg.id);
+      showAlert(`✓ Package deleted`);
+      fetchData();
+    } catch (e) {
+      showAlert(e.response?.data?.error || 'Failed to delete package', 'error');
+    }
   };
 
   // ── Format timestamp ───────────────────────────────────────
@@ -158,12 +246,22 @@ export default function AdminDashboard() {
       errs.username = "Username must be at least 3 characters";
     if (!/^[a-zA-Z0-9_]+$/.test(newUser.username.trim()))
       errs.username = "Letters, numbers and underscores only";
-    if (!newUser.password || newUser.password.length < 8)
+    if (!newUser.password) {
+      errs.password = "Password is required";
+    } else if (newUser.password.length < 8) {
       errs.password = "Password must be at least 8 characters";
+    } else if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,}$/.test(newUser.password)) {
+      errs.password = "Must include uppercase, lowercase, number, and special character";
+    }
+    
     if (!newUser.name.trim() || newUser.name.trim().length < 2)
       errs.name = "Full name must be at least 2 characters";
-    if (newUser.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newUser.email))
-      errs.email = "Enter a valid email address";
+      
+    if (newUser.email) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newUser.email)) {
+        errs.email = "Enter a valid email address";
+      }
+    }
     return errs;
   };
 
@@ -334,12 +432,21 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* ── Alert ── */}
+      {/* ── Alert (Toast) ── */}
       {alert && (
-        <div className={`alert alert-${alert.type}`} style={{ marginTop:'16px' }}>
-          {alert.msg}
+        <div className={`alert alert-${alert.type}`}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span>{alert.msg}</span>
+            <button 
+              onClick={() => setAlert(null)}
+              style={{ background:'none', border:'none', color:'inherit', cursor:'pointer', marginLeft:'12px', fontWeight:700 }}
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
+
 
       {/* ── Hint ── */}
       <div style={{
@@ -461,11 +568,23 @@ export default function AdminDashboard() {
               </div>
               <div className="form-group">
                 <label>Password * (min 8 chars)</label>
-                <input type="password" placeholder="Minimum 8 characters"
-                  value={newUser.password}
-                  style={inputStyle(newUserErrors.password)}
-                  onChange={e => { setNewUser({...newUser, password: e.target.value});
-                    setNewUserErrors({...newUserErrors, password:''}); }}/>
+                <div style={{ position: 'relative' }}>
+                  <input type={showPassword ? "text" : "password"} placeholder="Minimum 8 characters"
+                    value={newUser.password}
+                    style={{ ...inputStyle(newUserErrors.password), width: '100%', paddingRight: '44px' }}
+                    onChange={e => { setNewUser({...newUser, password: e.target.value});
+                      setNewUserErrors({...newUserErrors, password:''}); }}/>
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    style={{
+                      position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
+                      background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', color: '#475569'
+                    }}
+                  >
+                    {showPassword ? 'Hide' : 'Show'}
+                  </button>
+                </div>
                 {newUserErrors.password && <div style={errStyle}>⚠ {newUserErrors.password}</div>}
               </div>
               <div className="form-group">
@@ -683,6 +802,131 @@ export default function AdminDashboard() {
         </div>
       </div>
 
+      {/* Aid Package Management */}
+      <div className="card">
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
+          <h3 style={{ margin:0, padding:0, borderBottom:'none' }}>📦 Aid Package Management</h3>
+        </div>
+        
+        <div style={{ display:'grid', gap:'16px', background:'#f7fafc', padding:'16px', borderRadius:'8px', border:'1px solid #e2e8f0' }}>
+          <div className="form-group" style={{ maxWidth: '300px' }}>
+            <label style={{ fontWeight: 700 }}>Target Location (e.g. Ward 5)</label>
+            <input 
+              placeholder="Leave empty for all locations"
+              value={newPackage.location}
+              style={inputStyle(false)}
+              onChange={e => setNewPackage({...newPackage, location: e.target.value})}
+            />
+          </div>
+
+          <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '12px' }}>
+            <label style={{ fontWeight: 700, marginBottom: '8px', display: 'block' }}>Package Items</label>
+            {newPackage.items.map((item, index) => (
+              <div key={index} style={{ display:'flex', gap:'12px', alignItems:'center', marginBottom:'12px' }}>
+                <span style={{ fontWeight: 700, color: '#718096', width: '20px' }}>#{index + 1}</span>
+                <select 
+                  value={item.aid_type}
+                  style={inputStyle(false)}
+                  onChange={e => handlePackageItemChange(index, 'aid_type', e.target.value)}
+                >
+                  {['MAIZE','CASH','OIL','SEEDS','CLOTHES','FERTILISER','BLANKETS'].map(type => (
+                    <option key={type} value={type}>{type}</option>
+                  ))}
+                </select>
+                <select 
+                  value={item.unit}
+                  style={inputStyle(false)}
+                  onChange={e => handlePackageItemChange(index, 'unit', e.target.value)}
+                >
+                  {['KG','LITERS','USD','PACKS','ITEMS'].map(type => (
+                    <option key={type} value={type}>{type}</option>
+                  ))}
+                </select>
+                <input 
+                  type="number"
+                  placeholder="Amount"
+                  value={item.amount}
+                  style={inputStyle(false)}
+                  onChange={e => handlePackageItemChange(index, 'amount', e.target.value)}
+                />
+                {newPackage.items.length > 1 && (
+                  <button 
+                    onClick={() => handleRemovePackageItem(index)}
+                    style={{ background: '#fed7d7', color: '#c53030', border: 'none', borderRadius: '4px', padding: '8px', cursor: 'pointer', fontWeight: 700 }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            ))}
+            <button 
+              onClick={handleAddPackageItem}
+              style={{ background: '#ebf8ff', color: '#3182ce', border: '1px solid #90cdf4', borderRadius: '4px', padding: '6px 12px', cursor: 'pointer', fontWeight: 700, fontSize: '12px' }}
+            >
+              + Add Another Item
+            </button>
+          </div>
+
+          <button className="btn btn-primary" onClick={handleCreatePackage} disabled={packageLoading} style={{ marginTop: '8px' }}>
+            {packageLoading ? 'Creating package...' : '✓ Create Aid Package'}
+          </button>
+        </div>
+
+        <div style={{ marginTop:'24px' }}>
+          <div style={{ fontSize:'14px', fontWeight:700, marginBottom:'12px' }}>
+            Active Packages ({activePackages.length})
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Package ID</th>
+                  <th>Location</th>
+                  <th>Created</th>
+                  <th>Items Included</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activePackages.length > 0 ? activePackages.map(pkg => (
+                  <tr key={pkg.id}>
+                    <td style={{ fontFamily:'monospace', fontWeight:700, color:'#4a90d9' }}>
+                      #{pkg.id.substring(0, 8)}...
+                    </td>
+                    <td>{pkg.location || 'All Locations'}</td>
+                    <td style={{ fontSize:'12px', color:'#718096' }}>{pkg.created_at}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                        {pkg.items && pkg.items.map((it, idx) => (
+                          <span key={idx} style={{ background: '#edf2f7', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 600, color: '#4a5568' }}>
+                            {it.amount} {it.unit} {it.type || it.aid_type}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td>
+                      <button
+                        className="btn btn-red btn-sm"
+                        onClick={() => handleDeletePackage(pkg)}
+                        title={`Delete package for ${pkg.location || 'All Locations'}`}
+                      >
+                        🗑 Delete
+                      </button>
+                    </td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={5} style={{ textAlign:'center', color:'#a0aec0', padding:'24px' }}>
+                      No active packages available
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       {/* System Health */}
       <div className="card">
         <h3>🔧 System Health</h3>
@@ -703,6 +947,116 @@ export default function AdminDashboard() {
             <span style={{ fontWeight:700, color:'#2d3748' }}>{value}</span>
           </div>
         ))}
+      </div>
+
+      {/* Security Operations Summary Panel */}
+      <div className="card" style={{ gridColumn: 'span 2', background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(20, 30, 55, 0.95) 100%)', color: '#f8fafc', border: '1px solid rgba(255,255,255,0.08)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '15px' }}>
+          <div>
+            <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              🛡️ Security & Threat Intelligence Desk
+            </h3>
+            <p style={{ margin: '6px 0 0 0', fontSize: '13px', color: '#94a3b8', maxWidth: '650px' }}>
+              Automated rule-based security scanners inspect physical terminal handshake handshakes, fingerprint bypass triggers, and ledger blocks.
+            </p>
+          </div>
+          <a
+            href="/security"
+            style={{
+              padding: '10px 18px',
+              borderRadius: '999px',
+              background: 'rgba(255, 255, 255, 0.08)',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              color: '#f8fafc',
+              fontSize: '12px',
+              fontWeight: 800,
+              textDecoration: 'none',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              transition: 'all 0.2s ease-in-out'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(255,255,255,0.15)';
+              e.currentTarget.style.transform = 'translateY(-1px)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+              e.currentTarget.style.transform = 'none';
+            }}
+          >
+            Open Threat Panel ↗
+          </a>
+        </div>
+
+        <div style={{
+          marginTop: '20px',
+          background: 'rgba(9, 13, 22, 0.5)',
+          borderRadius: '10px',
+          border: '1px solid rgba(255,255,255,0.06)',
+          padding: '16px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '15px'
+        }}>
+          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '10px', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Monitored Logs
+              </div>
+              <div style={{ fontSize: '20px', fontWeight: 900, color: '#f8fafc', marginTop: '2px' }}>
+                {events.length} Events
+              </div>
+            </div>
+            <div style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '20px' }}>
+              <div style={{ fontSize: '10px', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Rule Threat Scans
+              </div>
+              <div style={{ fontSize: '20px', fontWeight: 900, color: '#10b981', marginTop: '2px' }}>
+                4 Active Rules
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {events.some(ev => ev.event_type.includes('FAIL') || ev.event_type.includes('ERROR') || ev.event_type.includes('MISMATCH')) ? (
+              <div style={{
+                background: 'rgba(249, 115, 22, 0.12)',
+                border: '1px solid rgba(249, 115, 22, 0.25)',
+                color: '#ff9800',
+                padding: '6px 14px',
+                borderRadius: '8px',
+                fontSize: '12px',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <span className="pulse-orange" style={{ width: '8px', height: '8px', background: '#ff9800', borderRadius: '50%' }} />
+                ⚠️ Suspicious Testing Anomalies Logged
+              </div>
+            ) : (
+              <div style={{
+                background: 'rgba(16, 185, 129, 0.12)',
+                border: '1px solid rgba(16, 185, 129, 0.25)',
+                color: '#34d399',
+                padding: '6px 14px',
+                borderRadius: '8px',
+                fontSize: '12px',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <span style={{ width: '8px', height: '8px', background: '#34d399', borderRadius: '50%' }} />
+                🟢 Zero Active Intrusion Alerts
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* ── STAT CARD MODAL ───────────────────────────────────── */}

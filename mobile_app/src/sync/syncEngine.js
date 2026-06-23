@@ -6,6 +6,7 @@ import {
   fetchCycleProgress,
   fetchPendingCache,
   fetchSystemStats,
+  getHardwareEvents as fetchHardwareEvents,
 } from "../api/endpoints";
 import { APP_SYNC } from "../config/env";
 import { createIdempotencyKey } from "../utils/idempotency";
@@ -34,14 +35,17 @@ export async function bootstrapOfflineData() {
 }
 
 export async function refreshServerSnapshot() {
-  const [{ beneficiaries }, cycle] = await Promise.all([
+  const [{ beneficiaries }, cycle, { events }] = await Promise.all([
     fetchBeneficiaries(),
     fetchCurrentCycle(),
+    fetchHardwareEvents(150) // Fetch a good chunk of events to detect collection status
   ]);
 
   let progress;
   try {
-    progress = await fetchCycleProgress();
+    // Pass the current cycle number so the server filters correctly
+    const cycleNum = cycle?.cycle ?? 0;
+    progress = await fetchCycleProgress(cycleNum);
   } catch {
     const [stats, pending] = await Promise.all([
       fetchSystemStats(),
@@ -49,6 +53,24 @@ export async function refreshServerSnapshot() {
     ]);
     const pendingCount = pending?.pending?.length || 0;
     const totalTx = stats?.total_transactions || 0;
+    // Build detail list from events as a fallback
+    const detailList = [];
+    const seen = new Set();
+    
+    (events || []).forEach(evt => {
+      const type = evt.event_type || evt.type;
+      if (type === "AID_DISTRIBUTED") {
+        const match = evt.message.match(/beneficiary\s+(\d+)/i);
+        if (match) {
+          const bId = match[1];
+          if (!seen.has(bId)) {
+            seen.add(bId);
+            detailList.push({ id: bId, status: "COLLECTED" });
+          }
+        }
+      }
+    });
+
     progress = {
       cycle: stats?.current_cycle || cycle?.cycle || 0,
       total_beneficiaries: stats?.total_beneficiaries || beneficiaries.length,
@@ -59,7 +81,7 @@ export async function refreshServerSnapshot() {
         0,
         (stats?.total_beneficiaries || beneficiaries.length) - (totalTx + pendingCount)
       ),
-      beneficiaries_detail: [],
+      beneficiaries_detail: detailList,
     };
   }
 
@@ -69,7 +91,7 @@ export async function refreshServerSnapshot() {
     saveProgress(progress),
   ]);
 
-  return { beneficiaries: beneficiaries || [], cycle, progress };
+  return { beneficiaries: beneficiaries || [], cycle, progress, events: events || [] };
 }
 
 export async function queueDistribution(payload) {

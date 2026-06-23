@@ -50,6 +50,8 @@ export default function ProfileModal({ onClose }) {
       errs.new_password = "New password is required";
     } else if (form.new_password.length < 8) {
       errs.new_password = "Password must be at least 8 characters";
+    } else if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,}$/.test(form.new_password)) {
+      errs.new_password = "Must include uppercase, lowercase, number, and special character";
     } else if (form.new_password === form.current_password) {
       errs.new_password = "New password must be different from current";
     }
@@ -72,8 +74,9 @@ export default function ProfileModal({ onClose }) {
     setLoading(true);
     try {
       await changePassword({
-        username    : username,
-        new_password: form.new_password
+        username        : username,
+        current_password: form.current_password,
+        new_password    : form.new_password
       });
       showAlert('✓ Password changed successfully');
       setForm({
