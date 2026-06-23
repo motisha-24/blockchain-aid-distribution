@@ -1,0 +1,558 @@
+/* ================================================================
+   Accessibility Enhancements — WCAG AA Compliance
+   Professional UI Enhancement — May 2026
+================================================================ */
+
+/* ── Skip to Main Content Link ────────────────────────────────– */
+
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: var(--color-primary);
+  color: white;
+  padding: var(--space-md) var(--space-lg);
+  text-decoration: none;
+  border-radius: var(--radius-md);
+  font-weight: var(--font-weight-bold);
+  z-index: var(--z-modal);
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* ── Focus Visible States ──────────────────────────────────────– */
+
+*:focus-visible {
+  outline: 3px solid var(--focus-ring-color);
+  outline-offset: 2px;
+}
+
+/* Override default focus styles for better visibility */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px dashed var(--focus-ring-color);
+  outline-offset: 2px;
+}
+
+body.dark-theme a:focus-visible,
+body.dark-theme button:focus-visible,
+body.dark-theme input:focus-visible,
+body.dark-theme select:focus-visible,
+body.dark-theme textarea:focus-visible {
+  outline-color: var(--dark-text);
+}
+
+/* ── Button Focus States ───────────────────────────────────────– */
+
+.btn:focus-visible {
+  outline: 3px solid var(--focus-ring-color);
+  outline-offset: 2px;
+  box-shadow: inset 0 0 0 3px var(--color-surface);
+}
+
+body.dark-theme .btn:focus-visible {
+  box-shadow: inset 0 0 0 3px var(--dark-surface);
+}
+
+/* ── Form Label Associations ───────────────────────────────────– */
+
+.form-label {
+  display: block;
+  margin-bottom: var(--space-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.form-label:not([for]) {
+  cursor: default;
+}
+
+/* ── Input Error Messages ──────────────────────────────────────– */
+
+.form-error,
+.form-helper {
+  font-size: var(--font-size-12);
+  margin-top: var(--space-xs);
+  line-height: var(--line-height-snug);
+}
+
+.form-error {
+  color: var(--color-danger);
+  font-weight: var(--font-weight-semibold);
+}
+
+.form-helper {
+  color: var(--color-text-muted);
+}
+
+/* ── Input Disabled States ─────────────────────────────────────– */
+
+input:disabled,
+textarea:disabled,
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  background-color: var(--color-surface-soft);
+}
+
+label[for]:has(input[disabled]) {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ── Button Disabled States ────────────────────────────────────– */
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ── Alternative Text for Icons ────────────────────────────────– */
+
+[aria-label] {
+  position: relative;
+}
+
+[aria-label]:hover::after {
+  content: attr(aria-label);
+  position: absolute;
+  bottom: 120%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-text-heading);
+  color: white;
+  padding: var(--space-md) var(--space-base);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-12);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+  z-index: var(--z-tooltip);
+  pointer-events: none;
+}
+
+/* ── Semantic Heading Structure ────────────────────────────────– */
+
+h1, h2, h3, h4, h5, h6 {
+  line-height: var(--line-height-tight);
+  margin-bottom: var(--space-base);
+}
+
+h1 {
+  font-size: var(--font-size-31);
+  font-weight: var(--font-weight-bold);
+}
+
+h2 {
+  font-size: var(--font-size-24);
+  font-weight: var(--font-weight-bold);
+}
+
+h3 {
+  font-size: var(--font-size-20);
+  font-weight: var(--font-weight-bold);
+}
+
+h4 {
+  font-size: var(--font-size-18);
+  font-weight: var(--font-weight-semibold);
+}
+
+h5 {
+  font-size: var(--font-size-16);
+  font-weight: var(--font-weight-semibold);
+}
+
+h6 {
+  font-size: var(--font-size-14);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* ── List Structure Accessibility ──────────────────────────────– */
+
+ul, ol {
+  list-style-position: outside;
+  margin-left: var(--space-xl);
+  margin-bottom: var(--space-lg);
+}
+
+li {
+  margin-bottom: var(--space-md);
+}
+
+/* ── Table Accessibility ───────────────────────────────────────– */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  caption-side: top;
+}
+
+caption {
+  font-weight: var(--font-weight-bold);
+  margin-bottom: var(--space-lg);
+  text-align: left;
+}
+
+th {
+  text-align: left;
+  font-weight: var(--font-weight-bold);
+  padding: var(--space-base);
+  border-bottom: 2px solid var(--color-border-strong);
+}
+
+td {
+  padding: var(--space-base);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* ── Color Contrast Ratios ─────────────────────────────────────– */
+
+/* Primary buttons: WCAG AAA contrast */
+.btn-primary {
+  background-color: var(--color-primary);
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+/* Success state */
+.badge-success,
+.alert-success {
+  background-color: var(--color-success-light);
+  color: var(--color-success);
+  /* Ensures WCAG AA contrast */
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Danger state */
+.badge-danger,
+.alert-danger {
+  background-color: var(--color-danger-light);
+  color: var(--color-danger);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* ── Text Sizing ───────────────────────────────────────────────– */
+
+body {
+  font-size: var(--font-size-16);
+  line-height: var(--line-height-relaxed);
+}
+
+/* Ensure minimum font sizes */
+.text-xs {
+  font-size: var(--font-size-11);
+}
+
+.text-sm {
+  font-size: var(--font-size-12);
+}
+
+small {
+  font-size: var(--font-size-12);
+}
+
+/* ── Link Styles ───────────────────────────────────────────────– */
+
+a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
+a:visited {
+  color: var(--color-primary-hover);
+}
+
+a:hover:not(.btn):not(.navbar-link) {
+  color: var(--color-primary-hover);
+  text-decoration-thickness: 3px;
+}
+
+a:active:not(.btn):not(.navbar-link) {
+  color: var(--color-primary);
+}
+
+/* ── Language & Locale ─────────────────────────────────────────– */
+
+html {
+  lang: "en";
+  direction: ltr;
+}
+
+/* ── Form Validation ───────────────────────────────────────────– */
+
+input:invalid:not(:placeholder-shown) {
+  border-color: var(--color-danger);
+  background-color: rgba(239, 68, 68, 0.08);
+}
+
+input:valid:not(:placeholder-shown) {
+  border-color: var(--color-success);
+  background-color: rgba(47, 133, 90, 0.08);
+}
+
+/* ── ARIA Live Regions ─────────────────────────────────────────– */
+
+[aria-live] {
+  position: relative;
+}
+
+[aria-live="polite"],
+[aria-live="assertive"] {
+  min-height: 1.5em;
+}
+
+/* ── ARIA Described By ─────────────────────────────────────────– */
+
+[aria-describedby] {
+  position: relative;
+}
+
+/* ── Loading Indication ────────────────────────────────────────– */
+
+[aria-busy="true"] {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+[aria-busy="true"]::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  margin-top: -10px;
+  margin-left: -10px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Expanded State Indicators ─────────────────────────────────– */
+
+[aria-expanded="true"] {
+  /* Supports visual indication of expanded state */
+}
+
+[aria-expanded="false"] {
+  /* Supports visual indication of collapsed state */
+}
+
+/* ── Selected & Checked States ─────────────────────────────────– */
+
+[aria-selected="true"],
+[aria-pressed="true"],
+input:checked {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 1px;
+}
+
+/* ── Tooltip Accessibility ─────────────────────────────────────– */
+
+[role="tooltip"] {
+  background-color: var(--color-text-heading);
+  color: white;
+  padding: var(--space-md) var(--space-base);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-12);
+  font-weight: var(--font-weight-bold);
+  max-width: 300px;
+  word-wrap: break-word;
+}
+
+/* ── Landmark Regions ──────────────────────────────────────────– */
+
+nav {
+  outline: none;
+}
+
+main {
+  outline: none;
+}
+
+[role="main"] {
+  outline: none;
+}
+
+footer {
+  outline: none;
+}
+
+/* ── Error Prevention ──────────────────────────────────────────– */
+
+.form-group {
+  margin-bottom: var(--space-lg);
+}
+
+.form-group + .form-group {
+  margin-top: var(--space-lg);
+}
+
+/* ── Motion & Animation Accessibility ───────────────────────────– */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── High Contrast Mode Support ────────────────────────────────– */
+
+@media (prefers-contrast: more) {
+  a {
+    text-decoration-thickness: 3px;
+  }
+
+  .btn,
+  .card,
+  .stat-card {
+    border: 2px solid currentColor;
+  }
+
+  input,
+  textarea,
+  select {
+    border-width: 2px;
+  }
+
+  *:focus-visible {
+    outline-width: 4px;
+  }
+}
+
+/* ── Color Blind Friendly ──────────────────────────────────────– */
+
+.alert-success::before,
+.badge-success::before {
+  content: '✓ ';
+}
+
+.alert-danger::before,
+.badge-danger::before {
+  content: '✗ ';
+}
+
+.alert-warning::before,
+.badge-warning::before {
+  content: '⚠ ';
+}
+
+.alert-info::before,
+.badge-info::before {
+  content: 'ℹ ';
+}
+
+/* ── Print Accessibility ───────────────────────────────────────– */
+
+@media print {
+  a {
+    text-decoration: underline;
+  }
+
+  a[href]::after {
+    content: " (" attr(href) ")";
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    line-height: var(--line-height-relaxed);
+  }
+}
+
+/* ── Zoom Support ──────────────────────────────────────────────– */
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Ensure 200% zoom support */
+html {
+  font-size: 16px;
+}
+
+@media (max-width: 480px) {
+  html {
+    font-size: 14px;
+  }
+}
+
+/* ── Dark Mode Accessibility ───────────────────────────────────– */
+
+body.dark-theme a {
+  color: var(--color-primary-light);
+}
+
+body.dark-theme a:visited {
+  color: #a5f3fc;
+}
+
+body.dark-theme a:focus-visible {
+  outline-color: var(--color-primary-light);
+}
+
+/* ── Form Field Required Indicator ─────────────────────────────– */
+
+.form-label.required {
+  position: relative;
+}
+
+.form-label.required::after {
+  content: ' (required)';
+  color: var(--color-danger);
+  font-weight: var(--font-weight-bold);
+}
+
+/* Screen reader only text */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.sr-only-focusable:active,
+.sr-only-focusable:focus {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}

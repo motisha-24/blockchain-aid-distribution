@@ -16,20 +16,46 @@ export default function LoginPage() {
   const [error,   setError]   = useState('');
   const [loading, setLoading] = useState(false);
   const [showPass, setShowPass] = useState(false);
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
+
+  React.useEffect(() => {
+    document.body.classList.toggle('dark-theme', theme === 'dark');
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+  };
+
+  // ── Validation constants ──
+  const USERNAME_MIN = 3;
+  const USERNAME_MAX = 30;
+  const PASSWORD_MIN = 6;
+  const PASSWORD_MAX = 128;
+  const USERNAME_PATTERN = /^[a-zA-Z0-9_]+$/; // alphanumeric + underscore only
 
   const validateForm = () => {
     const errs = {};
+    const trimmedUser = form.username.trim();
 
-    if (!form.username.trim()) {
+    // ── Username validation ──
+    if (!trimmedUser) {
       errs.username = 'Username is required';
-    } else if (form.username.trim().length < 3) {
-      errs.username = 'Username must be at least 3 characters';
-    } else if (form.username.trim().length > 50) {
-      errs.username = 'Username cannot exceed 50 characters';
+    } else if (trimmedUser.length < USERNAME_MIN) {
+      errs.username = `Username must be at least ${USERNAME_MIN} characters`;
+    } else if (trimmedUser.length > USERNAME_MAX) {
+      errs.username = `Username cannot exceed ${USERNAME_MAX} characters`;
+    } else if (!USERNAME_PATTERN.test(trimmedUser)) {
+      errs.username = 'Username may only contain letters, numbers, and underscores';
     }
 
+    // ── Password validation ──
     if (!form.password) {
       errs.password = 'Password is required';
+    } else if (form.password.length < PASSWORD_MIN) {
+      errs.password = `Password must be at least ${PASSWORD_MIN} characters`;
+    } else if (form.password.length > PASSWORD_MAX) {
+      errs.password = `Password cannot exceed ${PASSWORD_MAX} characters`;
     }
 
     return errs;
@@ -87,6 +113,18 @@ export default function LoginPage() {
     fontWeight: 600
   };
 
+  const hintStyle = {
+    fontSize: '10px',
+    color: 'var(--muted)',
+    marginTop: '4px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  };
+
+  /** Strip characters that aren't alphanumeric or underscore */
+  const sanitizeUsername = (value) => value.replace(/[^a-zA-Z0-9_]/g, '');
+
   return (
     <div style={{
       minHeight: '100vh',
@@ -96,6 +134,42 @@ export default function LoginPage() {
       position: 'relative',
       overflow: 'hidden'
     }}>
+      {/* Floating Theme Toggler */}
+      <button 
+        onClick={toggleTheme}
+        style={{
+          position: 'absolute',
+          top: '20px',
+          right: '20px',
+          width: '38px',
+          height: '38px',
+          borderRadius: '50%',
+          background: 'var(--surface-strong)',
+          border: '1px solid var(--border-strong)',
+          boxShadow: 'var(--shadow-soft)',
+          cursor: 'pointer',
+          display: 'grid',
+          placeItems: 'center',
+          color: 'var(--ink)',
+          fontSize: '15px',
+          transition: 'all 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+          zIndex: 10,
+          userSelect: 'none',
+          padding: 0
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.transform = 'scale(1.08) rotate(15deg)';
+          e.currentTarget.style.background = 'var(--surface)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.transform = 'scale(1) rotate(0deg)';
+          e.currentTarget.style.background = 'var(--surface-strong)';
+        }}
+        title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+      >
+        {theme === 'dark' ? '☀️' : '🌙'}
+      </button>
+
       {/* ── Cryptographic Blockchain Network Nodes Overlay ── */}
       <div style={{
         position: 'absolute',
@@ -230,19 +304,29 @@ export default function LoginPage() {
               Username
             </label>
             <input
+              id="login-username"
               type="text"
-              placeholder="Enter your username"
+              placeholder="Letters, numbers, underscores only"
               value={form.username}
+              maxLength={USERNAME_MAX}
               onChange={e => {
-                setForm({ ...form, username: e.target.value });
+                const sanitized = sanitizeUsername(e.target.value);
+                setForm({ ...form, username: sanitized });
                 setErrors({ ...errors, username: '' });
                 setError('');
               }}
               onKeyDown={e => e.key === 'Enter' && handleLogin()}
               style={inputStyle(errors.username)}
               autoComplete="username"
+              aria-describedby="username-hint"
             />
             {errors.username && <div style={errStyle}>⚠️ {errors.username}</div>}
+            <div id="username-hint" style={hintStyle}>
+              <span>a-z, 0-9, underscore</span>
+              <span style={{ color: form.username.trim().length >= USERNAME_MIN ? '#10b981' : 'var(--muted)' }}>
+                {form.username.trim().length}/{USERNAME_MAX}
+              </span>
+            </div>
           </div>
 
           <div style={{ marginBottom: '24px' }}>
@@ -259,9 +343,11 @@ export default function LoginPage() {
             </label>
             <div style={{ position: 'relative' }}>
               <input
+                id="login-password"
                 type={showPass ? 'text' : 'password'}
-                placeholder="Enter your password"
+                placeholder="Minimum 6 characters"
                 value={form.password}
+                maxLength={PASSWORD_MAX}
                 onChange={e => {
                   setForm({ ...form, password: e.target.value });
                   setErrors({ ...errors, password: '' });
@@ -270,6 +356,7 @@ export default function LoginPage() {
                 onKeyDown={e => e.key === 'Enter' && handleLogin()}
                 style={{ ...inputStyle(errors.password), paddingRight: '44px' }}
                 autoComplete="current-password"
+                aria-describedby="password-hint"
               />
               <button
                 type="button"
@@ -293,6 +380,12 @@ export default function LoginPage() {
               </button>
             </div>
             {errors.password && <div style={errStyle}>⚠️ {errors.password}</div>}
+            <div id="password-hint" style={hintStyle}>
+              <span>Min {PASSWORD_MIN} characters</span>
+              <span style={{ color: form.password.length >= PASSWORD_MIN ? '#10b981' : 'var(--muted)' }}>
+                {form.password.length}/{PASSWORD_MAX}
+              </span>
+            </div>
           </div>
 
           <button

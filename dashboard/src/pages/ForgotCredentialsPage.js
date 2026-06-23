@@ -16,6 +16,21 @@ export default function ForgotCredentialsPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [recoverErrors, setRecoverErrors] = useState({});
+  const [resetErrors, setResetErrors] = useState({});
+
+  // ── Validation constants ──
+  const USERNAME_MIN = 3;
+  const USERNAME_MAX = 30;
+  const PASSWORD_MIN = 8;
+  const PASSWORD_MAX = 128;
+  const EMAIL_MAX = 100;
+  const USERNAME_PATTERN = /^[a-zA-Z0-9_]+$/;
+  const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const PASSWORD_COMPLEXITY = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,}$/;
+
+  /** Strip characters that aren't alphanumeric or underscore */
+  const sanitizeUsername = (value) => value.replace(/[^a-zA-Z0-9_]/g, '');
 
   const cardStyle = {
     background: '#fff',
@@ -25,7 +40,7 @@ export default function ForgotCredentialsPage() {
     border: '1px solid rgba(255,255,255,0.5)'
   };
 
-  const inputStyle = {
+  const inputBaseStyle = {
     width: '100%',
     padding: '12px 14px',
     border: '1px solid #dbe3ee',
@@ -33,8 +48,17 @@ export default function ForgotCredentialsPage() {
     fontSize: '14px',
     background: '#f8fafc',
     color: '#1e293b',
-    outline: 'none'
+    outline: 'none',
+    transition: 'border-color 0.2s'
   };
+
+  const inputErrStyle = {
+    ...inputBaseStyle,
+    border: '1.5px solid #ef4444',
+    background: 'rgba(239, 68, 68, 0.06)'
+  };
+
+  const inputStyle = (hasError) => hasError ? inputErrStyle : inputBaseStyle;
 
   const labelStyle = {
     display: 'block',
@@ -46,12 +70,45 @@ export default function ForgotCredentialsPage() {
     letterSpacing: '0.08em'
   };
 
+  const fieldErrStyle = {
+    fontSize: '11px',
+    color: '#ef4444',
+    marginTop: '4px',
+    fontWeight: 600
+  };
+
+  const hintStyle = {
+    fontSize: '10px',
+    color: '#94a3b8',
+    marginTop: '4px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  };
+
+  const validateRecoverEmail = () => {
+    const errs = {};
+    const email = usernameForm.email.trim();
+    if (!email) {
+      errs.email = 'Email is required';
+    } else if (!EMAIL_PATTERN.test(email)) {
+      errs.email = 'Please enter a valid email address';
+    } else if (email.length > EMAIL_MAX) {
+      errs.email = `Email cannot exceed ${EMAIL_MAX} characters`;
+    }
+    return errs;
+  };
+
   const submitRecoverUsername = async () => {
-    setLoading(true);
     setError('');
     setMessage('');
     setUsernameResult([]);
 
+    const errs = validateRecoverEmail();
+    setRecoverErrors(errs);
+    if (Object.keys(errs).length > 0) return;
+
+    setLoading(true);
     try {
       const res = await recoverUsername({ email: usernameForm.email.trim() });
       setUsernameResult(res.data.accounts || []);
@@ -62,29 +119,61 @@ export default function ForgotCredentialsPage() {
     setLoading(false);
   };
 
+  const validateResetForm = () => {
+    const errs = {};
+    const trimmedUser = passwordForm.username.trim();
+    const trimmedEmail = passwordForm.email.trim();
+
+    // Username
+    if (!trimmedUser) {
+      errs.username = 'Username is required';
+    } else if (trimmedUser.length < USERNAME_MIN) {
+      errs.username = `Username must be at least ${USERNAME_MIN} characters`;
+    } else if (trimmedUser.length > USERNAME_MAX) {
+      errs.username = `Username cannot exceed ${USERNAME_MAX} characters`;
+    } else if (!USERNAME_PATTERN.test(trimmedUser)) {
+      errs.username = 'Username may only contain letters, numbers, and underscores';
+    }
+
+    // Email
+    if (!trimmedEmail) {
+      errs.email = 'Email is required';
+    } else if (!EMAIL_PATTERN.test(trimmedEmail)) {
+      errs.email = 'Please enter a valid email address';
+    } else if (trimmedEmail.length > EMAIL_MAX) {
+      errs.email = `Email cannot exceed ${EMAIL_MAX} characters`;
+    }
+
+    // New password
+    if (!passwordForm.new_password) {
+      errs.new_password = 'New password is required';
+    } else if (passwordForm.new_password.length < PASSWORD_MIN) {
+      errs.new_password = `Password must be at least ${PASSWORD_MIN} characters`;
+    } else if (passwordForm.new_password.length > PASSWORD_MAX) {
+      errs.new_password = `Password cannot exceed ${PASSWORD_MAX} characters`;
+    } else if (!PASSWORD_COMPLEXITY.test(passwordForm.new_password)) {
+      errs.new_password = 'Must include uppercase, lowercase, number, and special character (@$!%*?&#)';
+    }
+
+    // Confirm password
+    if (!passwordForm.confirm_password) {
+      errs.confirm_password = 'Please confirm your new password';
+    } else if (passwordForm.new_password !== passwordForm.confirm_password) {
+      errs.confirm_password = 'Passwords do not match';
+    }
+
+    return errs;
+  };
+
   const submitResetPassword = async () => {
-    setLoading(true);
     setError('');
     setMessage('');
 
-    if (passwordForm.new_password.length < 8) {
-      setLoading(false);
-      setError('Password must be at least 8 characters');
-      return;
-    }
+    const errs = validateResetForm();
+    setResetErrors(errs);
+    if (Object.keys(errs).length > 0) return;
 
-    if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,}$/.test(passwordForm.new_password)) {
-      setLoading(false);
-      setError('Password must include uppercase, lowercase, number, and special character');
-      return;
-    }
-
-    if (passwordForm.new_password !== passwordForm.confirm_password) {
-      setLoading(false);
-      setError('New password and confirmation do not match');
-      return;
-    }
-
+    setLoading(true);
     try {
       const res = await recoverPassword({
         username: passwordForm.username.trim(),
@@ -98,6 +187,7 @@ export default function ForgotCredentialsPage() {
         new_password: '',
         confirm_password: ''
       });
+      setResetErrors({});
     } catch (e) {
       setError(e.response?.data?.error || 'Unable to reset password');
     }
@@ -154,12 +244,26 @@ export default function ForgotCredentialsPage() {
             <div style={{ marginBottom: '16px' }}>
               <label style={labelStyle}>Registered Email</label>
               <input
+                id="recover-email"
                 type="email"
                 value={usernameForm.email}
-                onChange={e => setUsernameForm({ email: e.target.value })}
-                style={inputStyle}
+                maxLength={EMAIL_MAX}
+                onChange={e => {
+                  setUsernameForm({ email: e.target.value });
+                  setRecoverErrors({ ...recoverErrors, email: '' });
+                  setError('');
+                }}
+                style={inputStyle(recoverErrors.email)}
                 placeholder="you@example.com"
+                aria-describedby="recover-email-hint"
               />
+              {recoverErrors.email && <div style={fieldErrStyle}>⚠️ {recoverErrors.email}</div>}
+              <div id="recover-email-hint" style={hintStyle}>
+                <span>Valid email address</span>
+                <span style={{ color: EMAIL_PATTERN.test(usernameForm.email.trim()) ? '#10b981' : '#94a3b8' }}>
+                  {usernameForm.email.trim().length}/{EMAIL_MAX}
+                </span>
+              </div>
             </div>
 
             <button
@@ -208,34 +312,70 @@ export default function ForgotCredentialsPage() {
             <div style={{ marginBottom: '14px' }}>
               <label style={labelStyle}>Username</label>
               <input
+                id="reset-username"
                 type="text"
                 value={passwordForm.username}
-                onChange={e => setPasswordForm({ ...passwordForm, username: e.target.value })}
-                style={inputStyle}
-                placeholder="Enter your username"
+                maxLength={USERNAME_MAX}
+                onChange={e => {
+                  const sanitized = sanitizeUsername(e.target.value);
+                  setPasswordForm({ ...passwordForm, username: sanitized });
+                  setResetErrors({ ...resetErrors, username: '' });
+                  setError('');
+                }}
+                style={inputStyle(resetErrors.username)}
+                placeholder="Letters, numbers, underscores only"
+                aria-describedby="reset-username-hint"
               />
+              {resetErrors.username && <div style={fieldErrStyle}>⚠️ {resetErrors.username}</div>}
+              <div id="reset-username-hint" style={hintStyle}>
+                <span>a-z, 0-9, underscore</span>
+                <span style={{ color: passwordForm.username.trim().length >= USERNAME_MIN ? '#10b981' : '#94a3b8' }}>
+                  {passwordForm.username.trim().length}/{USERNAME_MAX}
+                </span>
+              </div>
             </div>
 
             <div style={{ marginBottom: '14px' }}>
               <label style={labelStyle}>Registered Email</label>
               <input
+                id="reset-email"
                 type="email"
                 value={passwordForm.email}
-                onChange={e => setPasswordForm({ ...passwordForm, email: e.target.value })}
-                style={inputStyle}
-                placeholder="Enter your email"
+                maxLength={EMAIL_MAX}
+                onChange={e => {
+                  setPasswordForm({ ...passwordForm, email: e.target.value });
+                  setResetErrors({ ...resetErrors, email: '' });
+                  setError('');
+                }}
+                style={inputStyle(resetErrors.email)}
+                placeholder="you@example.com"
+                aria-describedby="reset-email-hint"
               />
+              {resetErrors.email && <div style={fieldErrStyle}>⚠️ {resetErrors.email}</div>}
+              <div id="reset-email-hint" style={hintStyle}>
+                <span>Valid email address</span>
+                <span style={{ color: EMAIL_PATTERN.test(passwordForm.email.trim()) ? '#10b981' : '#94a3b8' }}>
+                  {passwordForm.email.trim().length}/{EMAIL_MAX}
+                </span>
+              </div>
             </div>
 
             <div style={{ marginBottom: '14px' }}>
               <label style={labelStyle}>New Password</label>
               <div style={{ position: 'relative' }}>
                 <input
+                  id="reset-new-password"
                   type={showPassword ? "text" : "password"}
                   value={passwordForm.new_password}
-                  onChange={e => setPasswordForm({ ...passwordForm, new_password: e.target.value })}
-                  style={{ ...inputStyle, paddingRight: '44px' }}
-                  placeholder="Minimum 8 characters"
+                  maxLength={PASSWORD_MAX}
+                  onChange={e => {
+                    setPasswordForm({ ...passwordForm, new_password: e.target.value });
+                    setResetErrors({ ...resetErrors, new_password: '' });
+                    setError('');
+                  }}
+                  style={{ ...inputStyle(resetErrors.new_password), paddingRight: '44px' }}
+                  placeholder="Min 8 chars, Aa1@"
+                  aria-describedby="reset-pw-hint"
                 />
                 <button
                   type="button"
@@ -248,16 +388,28 @@ export default function ForgotCredentialsPage() {
                   {showPassword ? 'Hide' : 'Show'}
                 </button>
               </div>
+              {resetErrors.new_password && <div style={fieldErrStyle}>⚠️ {resetErrors.new_password}</div>}
+              <div id="reset-pw-hint" style={hintStyle}>
+                <span>Upper, lower, digit, special</span>
+                <span style={{ color: passwordForm.new_password.length >= PASSWORD_MIN ? '#10b981' : '#94a3b8' }}>
+                  {passwordForm.new_password.length}/{PASSWORD_MAX}
+                </span>
+              </div>
             </div>
 
             <div style={{ marginBottom: '18px' }}>
               <label style={labelStyle}>Confirm Password</label>
               <div style={{ position: 'relative' }}>
                 <input
+                  id="reset-confirm-password"
                   type={showPassword ? "text" : "password"}
                   value={passwordForm.confirm_password}
-                  onChange={e => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })}
-                  style={{ ...inputStyle, paddingRight: '44px' }}
+                  maxLength={PASSWORD_MAX}
+                  onChange={e => {
+                    setPasswordForm({ ...passwordForm, confirm_password: e.target.value });
+                    setResetErrors({ ...resetErrors, confirm_password: '' });
+                  }}
+                  style={{ ...inputStyle(resetErrors.confirm_password), paddingRight: '44px' }}
                   placeholder="Re-enter new password"
                 />
                 <button
@@ -271,6 +423,12 @@ export default function ForgotCredentialsPage() {
                   {showPassword ? 'Hide' : 'Show'}
                 </button>
               </div>
+              {resetErrors.confirm_password && <div style={fieldErrStyle}>⚠️ {resetErrors.confirm_password}</div>}
+              {passwordForm.confirm_password && passwordForm.new_password === passwordForm.confirm_password && (
+                <div style={{ fontSize: '11px', color: '#10b981', marginTop: '4px', fontWeight: 600 }}>
+                  ✅ Passwords match
+                </div>
+              )}
             </div>
 
             <button

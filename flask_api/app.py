@@ -19,11 +19,13 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import jwt
 from env_loader import get_setting
+from config import REGISTRY_ADDRESS, AID_ADDRESS, CHAIN_ID, RPC_URL
 from blockchain import (
     register_beneficiary,
     distribute_aid,
     get_beneficiary,
     get_transaction,
+    get_transaction_by_hash,
     has_collected,
     get_total_transactions,
     get_total_beneficiaries,
@@ -515,13 +517,13 @@ def create_new_user():
 
 
 @app.route("/api/campaigns", methods=["GET"])
-@require_auth(["ADMIN", "NGO"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def campaigns_list():
     return jsonify(list_campaigns()), 200
 
 
 @app.route("/api/campaign/<int:campaign_id>", methods=["GET"])
-@require_auth(["ADMIN", "NGO"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def campaign_details(campaign_id):
     return jsonify(get_campaign(campaign_id)), 200
 
@@ -1283,6 +1285,15 @@ def transaction(tx_id):
     return jsonify({"error": result["error"]}), 404
 
 
+@app.route("/api/transaction/hash/<tx_hash>", methods=["GET"])
+@require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
+def transaction_by_hash(tx_hash):
+    result = get_transaction_by_hash(tx_hash)
+    if result["success"]:
+        return jsonify(result), 200
+    return jsonify({"error": result["error"]}), 404
+
+
 @app.route("/api/transactions/total", methods=["GET"])
 @require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def total_transactions():
@@ -2015,6 +2026,48 @@ def sms_log():
 #  STATS ENDPOINT
 # ================================================================
 
+def build_distribution_analytics(total_transactions, limit=100):
+    aid_totals = {}
+    recent_totals = {}
+
+    try:
+        total = int(total_transactions or 0)
+    except (TypeError, ValueError):
+        total = 0
+
+    if total <= 0:
+        return {
+            "aid_type_breakdown": [],
+            "recent_activity": []
+        }
+
+    start = max(1, total - limit + 1)
+    recent_start = max(1, total - 19)
+
+    for tx_id in range(total, start - 1, -1):
+        result = get_transaction(tx_id)
+        if not result.get("success"):
+            continue
+
+        aid_type = str(result.get("aid_type") or "UNKNOWN").upper()
+        amount = int(result.get("amount") or 0)
+        aid_totals[aid_type] = aid_totals.get(aid_type, 0) + amount
+
+        if tx_id >= recent_start:
+            recent_totals[aid_type] = recent_totals.get(aid_type, 0) + amount
+
+    return {
+        "aid_type_breakdown": [
+            {"name": aid_type, "value": amount}
+            for aid_type, amount in aid_totals.items()
+        ],
+        "recent_activity": [
+            {"name": aid_type, "amount": amount}
+            for aid_type, amount in recent_totals.items()
+        ]
+    }
+
+
 @app.route("/api/stats", methods=["GET"])
 @require_auth(["ADMIN", "NGO", "DONOR", "AUDITOR"])
 def stats():
@@ -2023,6 +2076,9 @@ def stats():
     cycle         = get_current_cycle()
     pending_txs   = get_pending()
     campaigns_res = list_campaigns()
+    distribution_analytics = build_distribution_analytics(
+        total_tx.get("total", 0)
+    )
 
     active_session = get_active_session()
     
@@ -2033,7 +2089,13 @@ def stats():
         "total_beneficiaries": total_benes.get("total", 0),
         "pending_cache"      : len(pending_txs),
         "total_campaigns"    : len(campaigns_res.get("campaigns", [])),
-        "active_session"     : active_session if active_session.get("success") else None
+        "active_session"     : active_session if active_session.get("success") else None,
+        "chain_id"           : CHAIN_ID,
+        "rpc_url"            : RPC_URL,
+        "registry_address"   : REGISTRY_ADDRESS,
+        "aid_address"        : AID_ADDRESS,
+        "aid_type_breakdown" : distribution_analytics["aid_type_breakdown"],
+        "recent_activity"    : distribution_analytics["recent_activity"]
     }), 200
 
 

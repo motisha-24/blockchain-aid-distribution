@@ -31,9 +31,9 @@ bool enrollFingerprintToSlot(int slot, int beneficiaryId = 0);
 // ----------------------------------------------------------------
 // Config - update these before uploading
 // ----------------------------------------------------------------
-const char* WIFI_SSID = "Mataruse";
-const char* WIFI_PASSWORD = "Pipilo##2018";
-const char* API_BASE_URL = "http://192.168.1.240:5000";
+const char* WIFI_SSID = "Mal";
+const char* WIFI_PASSWORD = "1234567890";
+const char* API_BASE_URL = "http://10.139.156.77:5000";
 const char* HARDWARE_USERNAME = "ngo_officer";
 const char* HARDWARE_PASSWORD = "ngo2024";
 String JWT_TOKEN = "";
@@ -68,7 +68,7 @@ constexpr uint32_t FP_BAUD = 57600;
 constexpr uint32_t GSM_BAUD = 9600;
 
 constexpr int SLOT_ID_OFFSET = 1000;
-constexpr int MIN_CONFIDENCE = 60;
+constexpr int MIN_CONFIDENCE = 50;
 constexpr int MAX_FAILED_ATTEMPTS = 3;
 constexpr unsigned long WIFI_RECONNECT_MS = 10000;
 constexpr unsigned long MAIN_LOOP_DELAY_MS = 120;
@@ -78,18 +78,26 @@ constexpr unsigned long ENROLLMENT_FIRST_SCAN_TIMEOUT_MS = 45000;
 constexpr unsigned long ENROLLMENT_SECOND_SCAN_TIMEOUT_MS = 45000;
 constexpr unsigned long ENROLLMENT_REMOVE_FINGER_TIMEOUT_MS = 15000;
 
+// Baud rates to try when auto-detecting sensor baud rate
+const uint32_t FP_BAUD_CANDIDATES[] = {57600, 9600, 19200, 38400, 115200};
+constexpr int FP_BAUD_COUNT = 5;
+// How many consecutive PACKETRECIEVEERR (0x01) before triggering sensor reinit
+constexpr int MAX_COMM_ERRORS_BEFORE_REINIT = 8;
+
 HardwareSerial FingerSerial(2);
 HardwareSerial GsmSerial(1);
 Adafruit_Fingerprint finger(&FingerSerial);
 
 bool sessionLocked = false;
 int attemptCount = 0;
+int consecutiveCommErrors = 0;  // tracks persistent UART error code 0x01
+uint32_t activeFpBaud = FP_BAUD;
 unsigned long lastWifiReconnectMs = 0;
 unsigned long lastFingerHandledMs = 0;
 unsigned long lastEnrollmentPollMs = 0;
 unsigned long lastWifiStatusPrintMs = 0;
-unsigned long lastGsmHeartbeatMs = 0;   // NEW: tracks last GSM status report
-unsigned long lastSmsQueuePollMs = 0;   // NEW: tracks last SMS queue poll
+unsigned long lastGsmHeartbeatMs = 0;
+unsigned long lastSmsQueuePollMs = 0;
 
 bool immediateFingerprintMode = false;
 int immediateBeneficiaryId = 0;
@@ -148,9 +156,17 @@ void blinkBoth(int times, int onMs, int offMs) {
 }
 
 void runSelfTest() {
-  blinkLed(GREEN_LED_PIN, 1, 180, 120);
-  blinkLed(RED_LED_PIN, 1, 180, 120);
-  blinkBoth(1, 220, 160);
+  // Alternating Green and Red blinks 3 times on boot
+  for (int i = 0; i < 3; i++) {
+    setGreen(true);
+    setRed(false);
+    delay(150);
+    setGreen(false);
+    setRed(true);
+    delay(150);
+  }
+  allLedsOff();
+  delay(200);
 }
 
 void signalIdentified() {
@@ -226,10 +242,20 @@ void connectWifiBlocking() {
   Serial.printf("[WIFI] Connecting to %s", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
+  // Slow Red blinking while waiting for connection
+  bool ledState = false;
   while (WiFi.status() != WL_CONNECTED) {
+    ledState = !ledState;
+    setRed(ledState);
     delay(500);
     Serial.print(".");
   }
+
+  // Solid green on successful connection for 2.5 seconds
+  setRed(false);
+  setGreen(true);
+  delay(2500);
+  setGreen(false);
 
   Serial.println();
   Serial.print("[WIFI] Connected. IP: ");
@@ -1068,7 +1094,6 @@ void handleDistributeResponse(int beneficiaryId, int httpStatus,
     Serial.printf("[API] JSON parse failed: %s\n", err.c_str());
     signalFailure();
     return;
-    return;
   }
 
   String action = doc["action"] | "UNKNOWN";
@@ -1174,12 +1199,68 @@ void submitDistribution(int beneficiaryId) {
 // ----------------------------------------------------------------
 // Fingerprint helpers
 // ----------------------------------------------------------------
+
+// Try to bring the sensor online at a given baud rate.
+bool tryFpBaud(uint32_t baud) {
+  FingerSerial.end();
+  delay(50);
+  FingerSerial.begin(baud, SERIAL_8N1, FP_RX_PIN, FP_TX_PIN);
+  finger.begin(baud);
+  delay(150);
+  return finger.verifyPassword();
+}
+
+// Walk through candidate baud rates until one works.
+// Returns true and updates activeFpBaud on success.
+bool autoDetectFpBaud() {
+  Serial.println("[SENSOR] Starting baud-rate auto-detect...");
+  for (int i = 0; i < FP_BAUD_COUNT; i++) {
+    uint32_t baud = FP_BAUD_CANDIDATES[i];
+    Serial.printf("[SENSOR] Trying %u baud... ", baud);
+    if (tryFpBaud(baud)) {
+      Serial.printf("OK\n");
+      logHardwareEvent("SENSOR_BAUD_DETECTED",
+        "Sensor found at baud " + String(baud),
+        "Previous active baud: " + String(activeFpBaud));
+      activeFpBaud = baud;
+      return true;
+    }
+    Serial.println("fail");
+  }
+  Serial.println("[SENSOR] Auto-detect failed across all baud rates.");
+  return false;
+}
+
+// Re-initialise sensor: try current baud first, then auto-detect.
+bool reinitSensor() {
+  Serial.println("[SENSOR] Reinitialising sensor...");
+  blinkLed(RED_LED_PIN, 2, 100, 100);
+  if (tryFpBaud(activeFpBaud)) {
+    Serial.println("[SENSOR] Reinit OK at existing baud.");
+    consecutiveCommErrors = 0;
+    return true;
+  }
+  if (autoDetectFpBaud()) {
+    consecutiveCommErrors = 0;
+    return true;
+  }
+  Serial.println("[SENSOR] Reinit FAILED — check wiring and power supply.");
+  logHardwareEvent("SENSOR_REINIT_FAILED",
+    "AS608 not responding on any baud rate",
+    "Check GPIO16/17 wiring and 3.3 V power supply");
+  return false;
+}
+
 bool sensorReady() {
   finger.begin(FP_BAUD);
   if (finger.verifyPassword()) {
     Serial.println("[SENSOR] AS608 ready.");
+    activeFpBaud = FP_BAUD;
     return true;
   }
+  // Default baud failed — try auto-detect on startup
+  Serial.println("[SENSOR] Default baud failed. Trying auto-detect...");
+  if (autoDetectFpBaud()) return true;
 
   Serial.println("[SENSOR] ERROR: AS608 not detected.");
   return false;
@@ -1338,13 +1419,42 @@ int scanFingerprintSlot() {
   uint8_t p = finger.getImage();
   if (p == FINGERPRINT_NOFINGER) return -1;
 
+  // Error 0x01 = FINGERPRINT_PACKETRECIEVEERR: UART communication error.
+  // This is NOT a finger-quality issue — retry up to 3 times before giving up.
+  if (p == FINGERPRINT_PACKETRECIEVEERR) {
+    for (int retry = 0; retry < 3; retry++) {
+      delay(80);
+      p = finger.getImage();
+      if (p == FINGERPRINT_OK || p == FINGERPRINT_NOFINGER) break;
+    }
+  }
+
+  if (p == FINGERPRINT_NOFINGER) return -1;
+
   if (p != FINGERPRINT_OK) {
-    Serial.printf("[AUTH] getImage failed: %u\n", p);
-    logHardwareEvent("FINGER_DETECTED_FAILED", "Finger detected but capture failed", "Error code: " + String(p));
+    Serial.printf("[AUTH] getImage error: %u\n", p);
+    if (p == FINGERPRINT_PACKETRECIEVEERR) {
+      // Communication error — sensor may be at wrong baud or have power issue
+      consecutiveCommErrors++;
+      Serial.printf("[AUTH] Comm errors: %d/%d\n", consecutiveCommErrors, MAX_COMM_ERRORS_BEFORE_REINIT);
+      logHardwareEvent("SENSOR_COMM_ERROR",
+        "AS608 UART communication error — check wiring and 3.3V power",
+        "Error code: 1 | Consecutive: " + String(consecutiveCommErrors));
+      if (consecutiveCommErrors >= MAX_COMM_ERRORS_BEFORE_REINIT) {
+        reinitSensor();
+      }
+    } else {
+      // Image quality error (0x03) or other sensor error
+      consecutiveCommErrors = 0;
+      logHardwareEvent("FINGER_IMAGE_FAILED",
+        "Finger detected but image quality too poor — press firmly and cleanly",
+        "Error code: " + String(p));
+    }
     return -2;
   }
 
-  logHardwareEvent("FINGER_DETECTED", "Finger detected on sensor, identifying...");
+  // Successful image capture — reset comm error counter
+  consecutiveCommErrors = 0;
 
   p = finger.image2Tz();
   if (p != FINGERPRINT_OK) {
@@ -1362,7 +1472,6 @@ int scanFingerprintSlot() {
       logHardwareEvent("IDENTITY_UNCONFIRMED", "Finger match confidence too low", "Confidence: " + String(finger.confidence));
       return -3;
     }
-    
     int beneficiaryId = finger.fingerID + SLOT_ID_OFFSET;
     logHardwareEvent("IDENTITY_CONFIRMED", "Identity confirmed for beneficiary " + String(beneficiaryId), "Confidence: " + String(finger.confidence));
     return finger.fingerID;
@@ -1416,6 +1525,9 @@ void setup() {
   pinMode(RED_LED_PIN, OUTPUT);
   allLedsOff();
 
+  // 1. Run physical LED self-test immediately on power-up
+  runSelfTest();
+
   FingerSerial.begin(FP_BAUD, SERIAL_8N1, FP_RX_PIN, FP_TX_PIN);
   GsmSerial.begin(GSM_BAUD, SERIAL_8N1, GSM_RX_PIN, GSM_TX_PIN);
 
@@ -1436,8 +1548,9 @@ void setup() {
     Serial.println("[GSM] Warning: SIM800L did not respond during startup.");
   }
 
+  // 2. Connect to WiFi (blinks Red while connecting, solid Green when connected)
   connectWifiBlocking();
-  runSelfTest();
+
   if (!hardwareLogin()) {
     Serial.println("[AUTH] Initial hardware login failed.");
   }

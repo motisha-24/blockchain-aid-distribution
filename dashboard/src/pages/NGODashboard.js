@@ -571,9 +571,23 @@ const handleSubmitFingerprint = async () => {
       const res = await getBeneficiary(parseInt(lookupId));
       setLookupResult({ id: parseInt(lookupId), ...res.data });
     } catch (e) {
-      setLookupError(
-        e.response?.data?.error || 'Beneficiary not found'
-      );
+      const raw = e.response?.data?.error || '';
+      let friendlyMsg;
+
+      if (/Beneficiary not registered/i.test(raw) ||
+          /execution reverted/i.test(raw)) {
+        friendlyMsg = `No beneficiary found with ID "${lookupId}". Please check the ID and try again, or register them first.`;
+      } else if (/network/i.test(raw) || /ECONNREFUSED/i.test(raw)) {
+        friendlyMsg = 'Unable to reach the blockchain network. Please check your connection and try again.';
+      } else if (raw) {
+        // Strip hex data from the message for any other blockchain errors
+        friendlyMsg = raw.replace(/,?\s*'0x[0-9a-fA-F]+'/, '').replace(/\(|\)/g, '').trim();
+        if (!friendlyMsg) friendlyMsg = 'Beneficiary not found';
+      } else {
+        friendlyMsg = 'Beneficiary not found';
+      }
+
+      setLookupError(friendlyMsg);
     }
   };
 
@@ -882,6 +896,8 @@ const handleSubmitFingerprint = async () => {
             <label>Beneficiary ID / Fingerprint Slot Mapping *</label>
             <input type="number" placeholder="e.g. 1001 (maps to slot 1)"
               value={regForm.id}
+              min={1}
+              max={149}
               style={inputStyle(regErrors.id)}
               onChange={e => {
                 setRegForm({ ...regForm, id: e.target.value });
@@ -895,6 +911,7 @@ const handleSubmitFingerprint = async () => {
             <label>Full Name *</label>
             <input placeholder="e.g. Alice Moyo"
               value={regForm.name}
+              maxLength={80}
               style={inputStyle(regErrors.name)}
               onChange={e => {
                 setRegForm({ ...regForm, name: e.target.value });
@@ -908,6 +925,7 @@ const handleSubmitFingerprint = async () => {
             <label>National ID * (63-123456A78)</label>
             <input placeholder="e.g. 63-123456A78"
               value={regForm.national_id}
+              maxLength={15}
               style={inputStyle(regErrors.national_id)}
               onChange={e => {
                 setRegForm({ ...regForm,
@@ -922,6 +940,7 @@ const handleSubmitFingerprint = async () => {
             <label>Phone Number * (+263...)</label>
             <input placeholder="e.g. +263771234001"
               value={regForm.phone}
+              maxLength={15}
               style={inputStyle(regErrors.phone)}
               onChange={e => {
                 setRegForm({ ...regForm, phone: e.target.value });
@@ -935,6 +954,7 @@ const handleSubmitFingerprint = async () => {
             <label>Location / Ward *</label>
             <input placeholder="e.g. Gweru Ward 5"
               value={regForm.location}
+              maxLength={80}
               style={inputStyle(regErrors.location)}
               onChange={e => {
                 setRegForm({ ...regForm, location: e.target.value });
@@ -1020,6 +1040,8 @@ const handleSubmitFingerprint = async () => {
             <input type="number"
               placeholder="Fingerprint ID e.g. 1"
               value={distForm.beneficiary_id}
+              min={1}
+              max={999999}
               style={inputStyle(distErrors.beneficiary_id)}
               onChange={e => {
                 setDistForm({ ...distForm,
@@ -1034,6 +1056,7 @@ const handleSubmitFingerprint = async () => {
             <label>Distribution Location *</label>
             <input placeholder="e.g. Gweru Ward 5"
               value={distForm.location}
+              maxLength={80}
               style={inputStyle(distErrors.location)}
               onChange={e => {
                 setDistForm({ ...distForm, location: e.target.value });
@@ -1089,6 +1112,8 @@ const handleSubmitFingerprint = async () => {
                   <label>Amount ({item.aid_unit}) *</label>
                   <input type="number" placeholder="e.g. 50"
                     value={item.amount}
+                    min={1}
+                    max={10000}
                     style={inputStyle(itemErrs.amount)}
                     onChange={e => {
                       const newItems = [...distForm.items];
